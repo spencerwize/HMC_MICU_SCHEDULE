@@ -364,8 +364,8 @@ Scheduler <- R6::R6Class("Scheduler",
     #' Try candidates in score order; return the first that does not deadlock
     #' any unscheduled slot within 3 calendar days. Falls back to top scorer.
     pick_no_deadlock = function(ordered_pool, d, slot, todo) {
-      near <- todo[sapply(todo, function(x)
-        abs(as.integer(x$d - d)) <= 3L)]
+      near <- todo[vapply(todo, function(x)
+        abs(as.integer(x$d - d)) <= 3L, logical(1L))]
       if (length(near) == 0L) return(ordered_pool[1L])
 
       for (candidate in ordered_pool) {
