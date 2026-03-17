@@ -134,13 +134,19 @@ validate_schedule <- function(sched_obj, time_off, targets) {
   # ── PP target summary ─────────────────────────────────────────────────────
   for (person in STAFF) {
     for (pp_name in PAY_PERIODS$name) {
-      actual <- sched_obj$pp_counts[[person]][[pp_name]]
-      target <- targets[[person]][[pp_name]]$sched_target
-      cme    <- targets[[person]][[pp_name]]$credited
-      if (actual < target) {
+      info    <- targets[[person]][[pp_name]]
+      actual  <- sched_obj$pp_counts[[person]][[pp_name]]
+      cme     <- info$credited
+      sched_t <- info$sched_target   # shifts still needed beyond CME
+      full_t  <- info$target         # full base target (before CME subtraction)
+      if (actual < sched_t) {
+        cme_note <- if (cme > 0L)
+          sprintf(" + %d CME = %d / full target %d", cme, actual + cme, full_t)
+        else
+          sprintf(" / target %d", full_t)
         warnings <- c(warnings, sprintf(
-          "%s %s: scheduled %d / target %d (CME credited: %d)",
-          person, pp_name, actual, target, cme))
+          "%s %s: scheduled %d%s",
+          person, pp_name, actual, cme_note))
       }
     }
   }

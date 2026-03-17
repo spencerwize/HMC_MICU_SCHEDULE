@@ -140,6 +140,9 @@ Scheduler <- R6::R6Class("Scheduler",
       count  <- 1L
       prev   <- d - 1L
       while (prev %in% worked) { count <- count + 1L; prev <- prev - 1L }
+      # Also look forward so pre-seeded holidays are counted in the streak
+      nxt    <- d + 1L
+      while (nxt  %in% worked) { count <- count + 1L; nxt  <- nxt  + 1L }
       count
     },
 
@@ -232,7 +235,12 @@ Scheduler <- R6::R6Class("Scheduler",
       wknd_ratio  <- if (length(worked_d) > 0) n_wknd / length(worked_d) else 0
       wknd_score  <- if (is_weekend(d)) -wknd_ratio else 0
 
-      urgency * 10 + cluster + roam_score + wknd_score
+      # Day-before-night penalty: avoid scheduling a day shift if this person
+      # already has Night assigned tomorrow (soft buffer, last resort only)
+      tomorrow_night <- self$get_slot(d + 1L, "Night")
+      dbn_penalty    <- if (!is.na(tomorrow_night) && tomorrow_night == person) -8 else 0
+
+      urgency * 10 + cluster + roam_score + wknd_score + dbn_penalty
     },
 
     # ── Algorithm phases ──────────────────────────────────────────────────────
@@ -360,16 +368,26 @@ Scheduler <- R6::R6Class("Scheduler",
         pp <- get_pp(d)
 
         night_p <- self$schedule[[ds]]$Night
-        app2_p  <- self$schedule[[ds]]$APP2
-        roam_p  <- self$schedule[[ds]]$Roaming
 
-        eligible <- STAFF[sapply(STAFF, function(p) {
-          !self$is_blocked(p, d) &&
-          (is.na(night_p) || night_p != p) &&
-          (is.na(app2_p)  || app2_p  != p) &&
-          (is.na(roam_p)  || roam_p  != p) &&
-          !self$had_night_on(p, d - 1L)
-        })]
+        # Fallback 1 (preferred): full hard-constraint check
+        eligible <- STAFF[sapply(STAFF, function(p) self$can_work_day(p, d))]
+
+        # Fallback 2: relax consecutive-day limit but keep night recovery
+        if (length(eligible) == 0L) {
+          eligible <- STAFF[sapply(STAFF, function(p) {
+            !self$is_blocked(p, d) &&
+            !self$night_recovery_blocked(p, d, for_night = FALSE) &&
+            !self$already_assigned(p, d) &&
+            (is.na(night_p) || night_p != p)
+          })]
+        }
+
+        # Fallback 3: anyone not blocked and not on night tonight
+        if (length(eligible) == 0L) {
+          eligible <- STAFF[sapply(STAFF, function(p)
+            !self$is_blocked(p, d) && !self$had_night_on(p, d - 1L) &&
+            (is.na(night_p) || night_p != p))]
+        }
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
             is.na(night_p) || night_p != p)]
