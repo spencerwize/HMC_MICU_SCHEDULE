@@ -11,13 +11,17 @@ validate_schedule <- function(sched_obj, time_off, targets) {
   warnings <- character()
   dates    <- sched_obj$dates
 
+  # for() strips Date class from Date vectors; always re-cast inside loops
+  as_date <- function(x) as.Date(x, origin = "1970-01-01")
+
   get <- function(d, slot) {
-    v <- sched_obj$schedule[[as.character(d)]][[slot]]
+    v <- sched_obj$schedule[[as.character(as_date(d))]][[slot]]
     if (is.null(v)) NA_character_ else v
   }
 
   # ── 1. APP1 always filled ──────────────────────────────────────────────────
   for (d in dates) {
+    d <- as_date(d)
     if (is.na(get(d, "APP1"))) {
       errors <- c(errors, sprintf("%s: APP1 not filled", as.character(d)))
     }
@@ -25,6 +29,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
 
   # ── 2. Night always filled ────────────────────────────────────────────────
   for (d in dates) {
+    d <- as_date(d)
     if (is.na(get(d, "Night"))) {
       errors <- c(errors, sprintf("%s: Night not filled", as.character(d)))
     }
@@ -35,10 +40,10 @@ validate_schedule <- function(sched_obj, time_off, targets) {
 
     # ── 3 & 4. Night recovery ─────────────────────────────────────────────
     for (nd in nights) {
+      nd <- as_date(nd)
       for (offset in 1:2) {
         check_d <- nd + offset
         if (!check_d %in% dates) next
-        # blocked from any shift
         for (s in DAY_SLOTS) {
           v <- get(check_d, s)
           if (!is.na(v) && v == person) {
@@ -65,6 +70,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
     # ── 5. Max 3 consecutive nights ────────────────────────────────────────
     night_set <- as.character(nights)
     for (nd in nights) {
+      nd <- as_date(nd)
       if (all(as.character(nd - (1:3)) %in% night_set)) {
         errors <- c(errors, sprintf(
           "%s: 4+ consecutive nights ending %s", person, as.character(nd)))
@@ -75,6 +81,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
     worked <- sort(c(sched_obj$person_shifts[[person]]$date, nights))
     worked_set <- as.character(worked)
     for (wd in worked) {
+      wd <- as_date(wd)
       if (all(as.character(wd - (1:4)) %in% worked_set)) {
         errors <- c(errors, sprintf(
           "%s: 5+ consecutive working days ending %s",
@@ -84,6 +91,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
 
     # ── 7. Day-to-night same calendar day ─────────────────────────────────
     for (d in dates) {
+      d <- as_date(d)
       has_day   <- any(sapply(DAY_SLOTS, function(s) {
         v <- get(d, s); !is.na(v) && v == person
       }))
@@ -97,6 +105,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
 
   # ── Double-booking (one person, multiple slots same day) ─────────────────
   for (d in dates) {
+    d <- as_date(d)
     assigned <- Filter(Negate(is.na), sapply(SLOTS, function(s) get(d, s)))
     dups <- assigned[duplicated(assigned)]
     if (length(dups) > 0L) {
@@ -108,6 +117,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
 
   # ── Soft: day-before-night flag ───────────────────────────────────────────
   for (d in dates[-length(dates)]) {
+    d <- as_date(d)
     tomorrow_night <- get(d + 1L, "Night")
     if (!is.na(tomorrow_night)) {
       for (s in DAY_SLOTS) {
