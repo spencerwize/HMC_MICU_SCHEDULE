@@ -161,7 +161,7 @@ def parse_time_off(xlsx_path):
             if fill and fill.fgColor:
                 c = fill.fgColor
                 if hasattr(c, 'rgb') and c.rgb:
-                    fg = c.rgb.upper()
+                    fg = str(c.rgb).upper()
                 elif hasattr(c, 'theme'):
                     fg = None
 
@@ -172,7 +172,7 @@ def parse_time_off(xlsx_path):
                 for side in [border.left, border.right, border.top, border.bottom]:
                     if side and side.color:
                         bc = side.color
-                        bc_rgb = bc.rgb.upper() if hasattr(bc, 'rgb') and bc.rgb else ""
+                        bc_rgb = str(bc.rgb).upper() if hasattr(bc, 'rgb') and bc.rgb else ""
                         if bc_rgb in ("FFFFFF00", "FFFF00"):
                             has_yellow_border = True
                             break
