@@ -85,6 +85,22 @@ Scheduler <- R6::R6Class("Scheduler",
       }
     },
 
+    # ── Undo a shift (mirror of add_shift; used by lookahead / swap repair) ──────
+    undo_shift = function(person, d, slot) {
+      self$schedule[[as.character(d)]][[slot]] <- NA_character_
+      pp <- get_pp(d)
+      if (!is.na(pp))
+        self$pp_counts[[person]][[pp]] <- self$pp_counts[[person]][[pp]] - 1L
+      if (slot == "Night") {
+        nights <- self$person_nights[[person]]
+        self$person_nights[[person]] <- nights[nights != d]
+      } else {
+        s <- self$person_shifts[[person]]
+        self$person_shifts[[person]] <-
+          s[!(s$date == d & s$slot == slot), , drop = FALSE]
+      }
+    },
+
     # ── Eligibility helpers ───────────────────────────────────────────────────
 
     #' TRUE if person cannot work at all on date d (off/cme/conference)
@@ -187,20 +203,33 @@ Scheduler <- R6::R6Class("Scheduler",
       TRUE
     },
 
+    # ── Eligible-candidate set for a (date, slot) pair ───────────────────────
+    eligible_for = function(d, slot) {
+      night_p <- self$schedule[[as.character(d)]]$Night
+      if (slot == "Night") {
+        STAFF[sapply(STAFF, function(p) self$can_work_night(p, d))]
+      } else {
+        STAFF[sapply(STAFF, function(p)
+          self$can_work_day(p, d) && (is.na(night_p) || night_p != p))]
+      }
+    },
+
     # ── Scoring ───────────────────────────────────────────────────────────────
 
     #' Night score — lower is preferred.
     #' Returns named list(priority, total, pp) for lexicographic sort.
+    #' priority: 0 = streak continuation, 1 = fresh start, 2 = had day shift yesterday
     night_score = function(person, d) {
-      nights        <- self$person_nights[[person]]
-      is_cont       <- (d - 1L) %in% nights
-      pp            <- get_pp(d)
-      pp_nights     <- if (!is.na(pp)) sum(get_pp_vec(nights) == pp, na.rm = TRUE) else 0L
-      list(
-        priority = if (is_cont) 0L else 1L,
-        total    = length(nights),
-        pp       = pp_nights
-      )
+      nights    <- self$person_nights[[person]]
+      is_cont   <- (d - 1L) %in% nights
+      pp        <- get_pp(d)
+      pp_nights <- if (!is.na(pp)) sum(get_pp_vec(nights) == pp, na.rm = TRUE) else 0L
+      # Penalise day-before-night: if person already has a day shift on d-1
+      had_day_prev <- any(sapply(DAY_SLOTS, function(s) {
+        v <- self$get_slot(d - 1L, s); !is.na(v) && v == person
+      }))
+      priority <- if (is_cont) 0L else if (had_day_prev) 2L else 1L
+      list(priority = priority, total = length(nights), pp = pp_nights)
     },
 
     #' Day score — higher is preferred.
@@ -208,11 +237,13 @@ Scheduler <- R6::R6Class("Scheduler",
       pp      <- get_pp(d)
       pp_info <- self$targets[[person]][[pp]]
 
-      days_left  <- sum(pp_info$pp_dates >= d)
-      slots_left <- max(0L, pp_info$sched_target - self$pp_counts[[person]][[pp]])
-      urgency    <- slots_left / max(days_left, 1L)
+      # Urgency: use available remaining days in this PP (not raw calendar days)
+      remaining   <- pp_info$pp_dates[pp_info$pp_dates >= d]
+      avail_left  <- sum(sapply(remaining, function(dd) !self$is_blocked(person, dd)))
+      slots_left  <- max(0L, pp_info$sched_target - self$pp_counts[[person]][[pp]])
+      urgency     <- slots_left / max(avail_left, 1L)
 
-      # Cluster score
+      # Cluster: prefer working on days adjacent to already-worked days
       worked      <- c(self$person_shifts[[person]]$date,
                        self$person_nights[[person]])
       prev_worked <- (d - 1L) %in% worked
@@ -230,13 +261,11 @@ Scheduler <- R6::R6Class("Scheduler",
 
       # Weekend fairness
       worked_d    <- shifts$date
-      n_wknd      <- if (length(worked_d) > 0)
-                       sum(is_weekend(worked_d)) else 0L
+      n_wknd      <- if (length(worked_d) > 0) sum(is_weekend(worked_d)) else 0L
       wknd_ratio  <- if (length(worked_d) > 0) n_wknd / length(worked_d) else 0
       wknd_score  <- if (is_weekend(d)) -wknd_ratio else 0
 
-      # Day-before-night penalty: avoid scheduling a day shift if this person
-      # already has Night assigned tomorrow (soft buffer, last resort only)
+      # Day-before-night penalty: strongly discourage if this person has Night tomorrow
       tomorrow_night <- self$get_slot(d + 1L, "Night")
       dbn_penalty    <- if (!is.na(tomorrow_night) && tomorrow_night == person) -8 else 0
 
@@ -256,77 +285,146 @@ Scheduler <- R6::R6Class("Scheduler",
       }
     },
 
-    schedule_nights = function() {
-      unscheduled <- self$dates[
-        sapply(self$dates, function(d)
-          is.na(self$schedule[[as.character(d)]]$Night))]
+    # ── Unified MRV scheduler ─────────────────────────────────────────────────
+    #
+    # Each iteration: pick the unscheduled (date, slot) with the FEWEST eligible
+    # candidates (Minimum Remaining Values), score candidates, then run a 1-step
+    # lookahead to avoid deadlocking a near-future slot before committing.
 
-      # Sort by number of eligible candidates (hardest = fewest eligible first)
-      difficulty <- sapply(unscheduled, function(d)
-        sum(sapply(STAFF, function(p) self$can_work_night(p, d))))
+    schedule_all = function() {
+      # Build initial todo list
+      todo <- list()
+      for (d_raw in self$dates) {
+        d  <- as.Date(d_raw, origin = "1970-01-01")
+        ds <- as.character(d)
+        for (slot in SLOTS) {
+          if (is.na(self$schedule[[ds]][[slot]]))
+            todo <- c(todo, list(list(d = d, slot = slot)))
+        }
+      }
 
-      dates_sorted <- unscheduled[order(difficulty, unscheduled)]
+      while (length(todo) > 0L) {
+        # MRV: slot with fewest eligible candidates first (recomputed each step)
+        n_elig <- sapply(todo, function(x)
+          length(self$eligible_for(x$d, x$slot)))
+        idx  <- which.min(n_elig)
+        item <- todo[[idx]]
+        todo <- todo[-idx]
 
-      for (d in dates_sorted) {
-        d <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
-        # Skip if already filled (holiday pre-seed)
-        if (!is.na(self$schedule[[as.character(d)]]$Night)) next
+        d    <- item$d
+        slot <- item$slot
+        ds   <- as.character(d)
+        if (!is.na(self$schedule[[ds]][[slot]])) next  # pre-seeded
 
-        eligible <- STAFF[sapply(STAFF, function(p) self$can_work_night(p, d))]
         pp       <- get_pp(d)
+        eligible <- self$eligible_for(d, slot)
 
+        # Force-fill fallback when no candidate passes hard constraints
         if (length(eligible) == 0L) {
-          # Force-fill: anyone not blocked by off/cme and not just off last night
-          eligible <- STAFF[sapply(STAFF, function(p)
-            !self$is_blocked(p, d) && !self$had_night_on(p, d - 1L))]
+          night_p <- self$schedule[[ds]]$Night
+          if (slot == "Night") {
+            eligible <- STAFF[sapply(STAFF, function(p)
+              !self$is_blocked(p, d) && !self$had_night_on(p, d - 1L))]
+          } else {
+            eligible <- STAFF[sapply(STAFF, function(p)
+              !self$is_blocked(p, d) &&
+              !self$night_recovery_blocked(p, d, for_night = FALSE) &&
+              !self$already_assigned(p, d) &&
+              (is.na(night_p) || night_p != p))]
+            if (length(eligible) == 0L)
+              eligible <- STAFF[sapply(STAFF, function(p)
+                !self$is_blocked(p, d) && (is.na(night_p) || night_p != p))]
+          }
           if (length(eligible) == 0L) eligible <- STAFF
         }
 
-        # Prefer under-target
-        under <- eligible[sapply(eligible, function(p) {
-          !is.na(pp) && self$pp_counts[[p]][[pp]] < self$targets[[p]][[pp]]$sched_target
-        })]
+        # Prefer under-target in this PP
+        under <- eligible[sapply(eligible, function(p)
+          !is.na(pp) &&
+          self$pp_counts[[p]][[pp]] < self$targets[[p]][[pp]]$sched_target)]
         pool <- if (length(under) > 0L) under else eligible
 
-        # Sort by night score (lexicographic on priority, total, pp)
-        scores    <- lapply(pool, function(p) self$night_score(p, d))
-        ord       <- order(
-          sapply(scores, `[[`, "priority"),
-          sapply(scores, `[[`, "total"),
-          sapply(scores, `[[`, "pp")
-        )
-        chosen <- pool[ord[1L]]
-        self$add_shift(chosen, d, "Night")
+        # Score and build ordered pool
+        if (slot == "Night") {
+          sc  <- lapply(pool, function(p) self$night_score(p, d))
+          ord <- order(sapply(sc, `[[`, "priority"),
+                       sapply(sc, `[[`, "total"),
+                       sapply(sc, `[[`, "pp"))
+        } else {
+          sc  <- sapply(pool, function(p) self$day_score(p, d, slot))
+          ord <- order(-sc)
+        }
+        ordered_pool <- pool[ord]
+
+        chosen <- self$pick_no_deadlock(ordered_pool, d, slot, todo)
+        self$add_shift(chosen, d, slot)
       }
     },
 
-    schedule_days = function() {
-      for (d in self$dates) {
-        d  <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
-        ds <- as.character(d)
-        pp      <- get_pp(d)
-        night_p <- self$schedule[[ds]]$Night
+    #' Try candidates in score order; return the first that does not deadlock
+    #' any unscheduled slot within 3 calendar days. Falls back to top scorer.
+    pick_no_deadlock = function(ordered_pool, d, slot, todo) {
+      near <- todo[sapply(todo, function(x)
+        abs(as.integer(x$d - d)) <= 3L)]
+      if (length(near) == 0L) return(ordered_pool[1L])
 
-        for (slot in DAY_SLOTS) {
-          if (!is.na(self$schedule[[ds]][[slot]])) next  # already filled
-
-          eligible <- STAFF[sapply(STAFF, function(p) {
-            self$can_work_day(p, d) &&
-              (is.na(night_p) || night_p != p)
-          })]
-          if (length(eligible) == 0L) next
-
-          under <- eligible[sapply(eligible, function(p) {
-            !is.na(pp) &&
-              self$pp_counts[[p]][[pp]] < self$targets[[p]][[pp]]$sched_target
-          })]
-          pool <- if (length(under) > 0L) under else eligible
-
-          scores <- sapply(pool, function(p) self$day_score(p, d, slot))
-          chosen <- pool[which.max(scores)]
-          self$add_shift(chosen, d, slot)
-        }
+      for (candidate in ordered_pool) {
+        self$add_shift(candidate, d, slot)
+        deadlock <- any(sapply(near, function(x)
+          length(self$eligible_for(x$d, x$slot)) == 0L))
+        self$undo_shift(candidate, d, slot)
+        if (!deadlock) return(candidate)
       }
+      ordered_pool[1L]  # all choices deadlock; accept best-scoring
+    },
+
+    # ── Swap-based repair: eliminate day-before-night soft violations ─────────
+    #
+    # After the MRV fill, scan for (day D → night D+1) violations and replace
+    # the offending day-shift worker with someone who won't create a new dbn.
+    # Runs up to 3 passes or until no further improvement is possible.
+
+    swap_repair_pass = function() {
+      for (pass in seq_len(3L)) {
+        improved <- FALSE
+        for (d_raw in self$dates[-length(self$dates)]) {
+          d <- as.Date(d_raw, origin = "1970-01-01")
+          night_p <- self$get_slot(d + 1L, "Night")
+          if (is.na(night_p)) next
+          for (slot in DAY_SLOTS) {
+            v <- self$get_slot(d, slot)
+            if (!is.na(v) && v == night_p)
+              if (self$try_swap_out(d, slot, night_p)) improved <- TRUE
+          }
+        }
+        if (!improved) break
+      }
+    },
+
+    #' Remove `person` from `slot` on `d` and replace with a candidate who
+    #' (a) passes all hard constraints and (b) won't themselves have Night
+    #' tomorrow. Returns TRUE on success; restores original on failure.
+    try_swap_out = function(d, slot, person) {
+      self$undo_shift(person, d, slot)
+      pp <- get_pp(d)
+      tn <- self$get_slot(d + 1L, "Night")   # still = person
+
+      candidates <- STAFF[sapply(STAFF, function(p) {
+        if (p == person) return(FALSE)
+        if (!self$can_work_day(p, d)) return(FALSE)
+        # Avoid creating a new dbn for the replacement
+        if (!is.na(tn) && tn == p) return(FALSE)
+        TRUE
+      })]
+
+      if (length(candidates) > 0L) {
+        counts <- sapply(candidates, function(p)
+          if (!is.na(pp)) self$pp_counts[[p]][[pp]] else 0L)
+        self$add_shift(candidates[which.min(counts)], d, slot)
+        return(TRUE)
+      }
+      self$add_shift(person, d, slot)  # restore
+      FALSE
     },
 
     cleanup_pass = function() {
@@ -406,13 +504,13 @@ Scheduler <- R6::R6Class("Scheduler",
     run = function() {
       message("  Pre-seeding holidays...")
       self$preseed_holidays()
-      message("  Scheduling nights (hardest-first)...")
-      self$schedule_nights()
-      message("  Scheduling day shifts (forward fill)...")
-      self$schedule_days()
-      message("  Cleanup pass...")
+      message("  Scheduling all slots (MRV hardest-first + lookahead)...")
+      self$schedule_all()
+      message("  Cleanup pass (PP quota fill)...")
       self$cleanup_pass()
-      message("  Force-filling APP1...")
+      message("  Swap repair (day-before-night)...")
+      self$swap_repair_pass()
+      message("  Force-filling remaining APP1...")
       self$force_fill_app1()
       message("  Done.")
       invisible(self)
