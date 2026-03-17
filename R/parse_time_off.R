@@ -60,9 +60,10 @@ parse_time_off <- function(xlsx_path) {
                function(vec) safe_color(vec, fmt_id) %in% YELLOW))
   }
 
-  # ── Find date rows (scan col 1 for Date values) ────────────────────────────
-  col1 <- cells[cells$col == 1, ]
-  date_rows <- col1[!is.na(col1$date), c("row", "date")]
+  # ── Find date rows (scan col 3 for Date values) ────────────────────────────
+  # Layout: col 2 = Day Of Week, col 3 = Date, col 4+ = staff
+  col3 <- cells[cells$col == 3, ]
+  date_rows <- col3[!is.na(col3$date), c("row", "date")]
 
   # Keep only rows within schedule window
   date_rows <- date_rows[

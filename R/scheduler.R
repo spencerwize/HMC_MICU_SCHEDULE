@@ -260,6 +260,7 @@ Scheduler <- R6::R6Class("Scheduler",
       dates_sorted <- unscheduled[order(difficulty, unscheduled)]
 
       for (d in dates_sorted) {
+        d <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
         # Skip if already filled (holiday pre-seed)
         if (!is.na(self$schedule[[as.character(d)]]$Night)) next
 
@@ -293,7 +294,8 @@ Scheduler <- R6::R6Class("Scheduler",
 
     schedule_days = function() {
       for (d in self$dates) {
-        ds      <- as.character(d)
+        d  <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
+        ds <- as.character(d)
         pp      <- get_pp(d)
         night_p <- self$schedule[[ds]]$Night
 
@@ -331,6 +333,7 @@ Scheduler <- R6::R6Class("Scheduler",
           if (needed <= 0L) next
 
           for (d in p_dates) {
+            d <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
             if (needed <= 0L) break
             if (!self$can_work_day(person, d)) next
             ds <- as.character(d)
@@ -351,6 +354,7 @@ Scheduler <- R6::R6Class("Scheduler",
 
     force_fill_app1 = function() {
       for (d in self$dates) {
+        d  <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
         ds <- as.character(d)
         if (!is.na(self$schedule[[ds]]$APP1)) next
         pp <- get_pp(d)
