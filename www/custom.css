@@ -1,0 +1,100 @@
+/* ─── HMC MICU APP Schedule — custom styles ─── */
+
+/* Navbar brand */
+.navbar-brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Stat cards */
+.card {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  border: 1px solid #e0e4ea;
+}
+
+.card-header {
+  background: #f0f4fa;
+  font-weight: 600;
+  border-bottom: 1px solid #d8dfe8;
+}
+
+/* Sidebar */
+.bslib-sidebar-layout > .sidebar {
+  border-right: 1px solid #dde3ec;
+}
+
+/* reactable table header */
+.rt-thead {
+  font-size: 12px;
+}
+
+/* Schedule grid cells */
+.rt-td {
+  font-size: 11px;
+  padding: 3px 5px !important;
+}
+
+/* Calendar table */
+.cal-table td {
+  border: 1px solid #ddd;
+  padding: 4px 6px;
+  min-width: 52px;
+  height: 52px;
+  vertical-align: top;
+  font-size: 12px;
+}
+
+.cal-table th {
+  background: #2E75B6;
+  color: white;
+  text-align: center;
+  padding: 6px;
+  font-size: 12px;
+}
+
+/* Legend chips */
+.legend-chip {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 2px;
+  border: 1px solid #ccc;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+/* Alert styling */
+.alert {
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* Download button */
+.btn-success {
+  background-color: #28a745;
+  border-color: #28a745;
+}
+
+/* Progress bar */
+.progress-bar {
+  background-color: #203864;
+}
+
+/* Compact mode: tighter row height */
+.rt-compact .rt-tr {
+  min-height: 28px;
+}
+
+/* plotly chart container */
+.js-plotly-plot {
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* sidebar section headers */
+.text-muted.mt-2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}

@@ -286,21 +286,20 @@ class Scheduler:
                 return True
         return False
 
-    def night_recovery_blocked(self, person, d):
+    def night_recovery_blocked(self, person, d, for_night=False):
         """
-        After last night on day N, blocked on N+1 and N+2.
-        Returns True if d is within recovery window.
+        After the LAST night of a streak ending on day N, blocked N+1 and N+2.
+        for_night=True  -> allow streak continuation (last night == d-1 is OK)
+        for_night=False -> strict (covers constraint 3 + recovery for day shifts)
         """
-        nights = sorted(self.person_nights[person])
-        if not nights:
+        past_nights = [nd for nd in self.person_nights[person] if nd < d]
+        if not past_nights:
             return False
-        # Find the most recent streak ending before d
-        for nd in reversed(nights):
-            if nd < d:
-                if d <= nd + timedelta(2):
-                    return True
-                break
-        return False
+        last_night = max(past_nights)
+        # Streak continuation: if we worked last night, keep going (nights only)
+        if for_night and last_night == d - timedelta(1):
+            return False
+        return d <= last_night + timedelta(2)
 
     def had_night_on(self, person, d):
         return d in self.person_nights[person]
@@ -309,10 +308,7 @@ class Scheduler:
         """Can person work a day shift on date d?"""
         if self.is_blocked(person, d):
             return False
-        if self.night_recovery_blocked(person, d):
-            return False
-        # No day shift morning after night shift
-        if self.had_night_on(person, d - timedelta(1)):
+        if self.night_recovery_blocked(person, d, for_night=False):
             return False
         # No day-to-night same day: check if assigned night on d
         # (can't work day AND night same day — handled at assignment time)
@@ -329,19 +325,20 @@ class Scheduler:
         """Can person work night on date d?"""
         if self.is_blocked(person, d):
             return False
-        if self.night_recovery_blocked(person, d):
+        if self.night_recovery_blocked(person, d, for_night=True):
             return False
         # No day shift same day (day-to-night constraint)
         for slot in DAY_SLOTS:
             if self.schedule[d].get(slot) == person:
                 return False
-        # Cannot work night if already pre-assigned to day shift the next morning
-        # (covers holiday pre-seeds: no night on D if day-assigned on D+1)
-        next_d = d + timedelta(1)
-        if next_d in self.schedule:
-            for slot in DAY_SLOTS:
-                if self.schedule[next_d].get(slot) == person:
-                    return False
+        # Cannot work night if already pre-assigned to a day shift on D+1 or D+2
+        # (covers holiday pre-seeds and the 2-day recovery window)
+        for offset in (1, 2):
+            check_d = d + timedelta(offset)
+            if check_d in self.schedule:
+                for slot in DAY_SLOTS:
+                    if self.schedule[check_d].get(slot) == person:
+                        return False
         # Max 3 consecutive nights
         consec = self._consec_nights_if_added(person, d)
         if consec > 3:
