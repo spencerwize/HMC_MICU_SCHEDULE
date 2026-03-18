@@ -23,7 +23,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     if (!is.null(fg))     args$fgFill         <- fg
     if (bold)             args$textDecoration  <- "bold"
     if (!is.null(border)) {
-      args$border       <- border
+      args$border       <- if (border == "All") c("top","bottom","left","right")
+                           else tolower(border)
       args$borderColour <- border_color
     }
     do.call(createStyle, args)
