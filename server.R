@@ -8,12 +8,13 @@ server <- function(input, output, session) {
   pipeline <- eventReactive(input$run_btn, {
     withProgress(message = "Building schedule…", value = 0, {
       setProgress(0.1, detail = "Parsing time-off data…")
-      xlsx_path <- if (!is.null(input$tof_file)) {
+      # Priority: uploaded file > TIMEOFF_SOURCE env var > local fallback
+      tof_source <- if (!is.null(input$tof_file)) {
         input$tof_file$datapath
       } else {
-        "Time_Off_Requests.xlsx"
+        TIMEOFF_DEFAULT_SOURCE
       }
-      time_off <- parse_time_off(xlsx_path)
+      time_off <- new_parse_time_off(tof_source)
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)
