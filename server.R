@@ -14,7 +14,7 @@ server <- function(input, output, session) {
       } else {
         TIMEOFF_DEFAULT_SOURCE
       }
-      time_off <- new_parse_time_off(tof_source)
+      time_off <- parse_time_off(tof_source)
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)

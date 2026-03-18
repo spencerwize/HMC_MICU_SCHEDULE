@@ -21,7 +21,7 @@ suppressPackageStartupMessages({
 # Source all R module files
 r_files <- c(
   "R/constants.R",
-  "R/new_parse_time_off.R",
+  "R/parse_time_off.R",
   "R/targets.R",
   "R/scheduler.R",
   "R/validate.R",
@@ -39,7 +39,7 @@ TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
 run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
                          verbose = TRUE) {
   if (verbose) message("Parsing time-off data...")
-  time_off <- new_parse_time_off(path)
+  time_off <- parse_time_off(path)
 
   if (verbose) message("Computing per-PP targets...")
   targets  <- compute_targets(time_off)

@@ -1,122 +1,200 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# parse_time_off.R  —  Read Time_Off_Requests.xlsx using tidyxl
+# parse_time_off.R  —  Text-value parser supporting Google Sheets,
+#                       local XLSX, and local CSV
 #
-# Returns: named list  person -> data.frame(date=Date, type=chr)
-#   type values: "off"  plain off day   (red fill, no vac keyword)
-#                "vac"  vacation day    (red fill + vac keyword)
-#                "cme"  credited day    (orange fill + yellow border)
+# ── Google Sheet layout ───────────────────────────────────────────────────────
+#
+#   Row 1 (header):  Date | Katie | John | Hayden | Todd | Caroline | ...
+#   Row 2+:          <date> | <value> | <value> | ...
+#
+#   • Column order doesn't matter — columns are matched by header name.
+#   • The date column must be named "Date" (case-insensitive).
+#   • Blank cell → available to work (no entry recorded).
+#
+# ── Cell values (case-insensitive) ───────────────────────────────────────────
+#
+#   "cme", "conf", "conference"          → cme  (credited, no shift target)
+#   "vac", "vacation", or VAC_KEYWORDS   → vac  (may become PTO)
+#   anything else non-blank              → off  (plain off day)
+#
+# ── Auth for private Google Sheets ───────────────────────────────────────────
+#
+#   Option A — Service account (recommended for deployed apps):
+#     Set env var GS_SERVICE_ACCOUNT_JSON to the path of the JSON key file,
+#     or paste the entire JSON string into the env var directly.
+#     Shinyapps.io: add the env var in App → Settings → Environment Variables.
+#
+#   Option B — Sheet published to web (no credentials needed):
+#     In Google Sheets: File → Share → Publish to web → Sheet → CSV
+#     Pass the resulting URL as `path`.  No GS_SERVICE_ACCOUNT_JSON needed.
+#
+# Returns: named list  person → data.frame(date = Date, type = chr)
+#   type values: "off" | "vac" | "cme"
 # ─────────────────────────────────────────────────────────────────────────────
 
-parse_time_off <- function(xlsx_path) {
-  # Initialise empty result
-  empty_df <- function() {
+parse_time_off <- function(path, sheet = NULL) {
+
+  empty_df <- function()
     data.frame(date = as.Date(character()), type = character(),
                stringsAsFactors = FALSE)
-  }
   result <- setNames(lapply(STAFF, function(p) empty_df()), STAFF)
 
-  if (!file.exists(xlsx_path)) {
-    message("WARNING: ", xlsx_path, " not found — proceeding with no time-off data.")
+  raw <- read_timeoff_source(path, sheet)
+  if (is.null(raw) || nrow(raw) == 0) return(result)
+
+  # ── Locate Date column ────────────────────────────────────────────────────
+  hdr      <- colnames(raw)
+  date_col <- which(tolower(trimws(hdr)) == "date")
+  if (length(date_col) == 0)
+    date_col <- which(vapply(raw, looks_like_dates, logical(1L)))[1]
+  if (length(date_col) == 0 || is.na(date_col)) {
+    message("WARNING: no 'Date' column found in time-off source.")
     return(result)
   }
 
-  # ── Load cells & formats ───────────────────────────────────────────────────
-  sheet_name <- "2026 Full Year"
-  avail_sheets <- tidyxl::xlsx_sheet_names(xlsx_path)
-  if (!sheet_name %in% avail_sheets) {
-    sheet_name <- avail_sheets[1]
-    message("WARNING: sheet '2026 Full Year' not found; using '", sheet_name, "'")
-  }
+  # ── Parse dates ────────────────────────────────────────────────────────────
+  dates <- coerce_dates(raw[[date_col]])
 
-  cells   <- tidyxl::xlsx_cells(xlsx_path, sheets = sheet_name)
-  formats <- tidyxl::xlsx_formats(xlsx_path)
-
-  # Pull fill fg color and border colors from formats by local_format_id
-  fg_colors    <- formats$local$fill$patternFill$fgColor$rgb
-  border_left  <- formats$local$border$left$color$rgb
-  border_right <- formats$local$border$right$color$rgb
-  border_top   <- formats$local$border$top$color$rgb
-  border_bot   <- formats$local$border$bottom$color$rgb
-
-  safe_color <- function(vec, idx) {
-    if (is.null(vec) || idx < 1 || idx > length(vec)) return(NA_character_)
-    toupper(as.character(vec[idx]))
-  }
-
-  is_red_fill <- function(fmt_id) {
-    clr <- safe_color(fg_colors, fmt_id)
-    !is.na(clr) && clr %in% c("FFF4CCCC", "F4CCCC", "FFFF0000",
-                               "FFFFE0E0", "FFFFC0C0", "FFFF9999")
-  }
-
-  is_orange_fill <- function(fmt_id) {
-    clr <- safe_color(fg_colors, fmt_id)
-    !is.na(clr) && clr == "FFFF6D01"
-  }
-
-  has_yellow_border <- function(fmt_id) {
-    YELLOW <- c("FFFFFF00", "FFFF00", "00FFFF00")
-    any(sapply(list(border_left, border_right, border_top, border_bot),
-               function(vec) safe_color(vec, fmt_id) %in% YELLOW))
-  }
-
-  # ── Find date rows (scan col 3 for Date values) ────────────────────────────
-  # Layout: col 2 = Day Of Week, col 3 = Date, col 4+ = staff
-  col3 <- cells[cells$col == 3, ]
-  date_rows <- col3[!is.na(col3$date), c("row", "date")]
-
-  # Keep only rows within schedule window
-  date_rows <- date_rows[
-    !is.na(date_rows$date) &
-      date_rows$date >= SCHEDULE_START &
-      date_rows$date <= SCHEDULE_END, ]
-
-  if (nrow(date_rows) == 0) {
-    message("WARNING: No date rows found in time-off sheet for schedule window.")
+  in_window <- !is.na(dates) &
+    dates >= SCHEDULE_START & dates <= SCHEDULE_END
+  if (!any(in_window)) {
+    message("WARNING: no rows in time-off source fall within ",
+            format(SCHEDULE_START, "%b %d"), " – ",
+            format(SCHEDULE_END,   "%b %d"), ".")
     return(result)
   }
+  dates <- dates[in_window]
+  raw   <- raw[in_window, , drop = FALSE]
 
-  # Build a row-indexed lookup of cells for fast access
-  cells_by_row <- split(cells, cells$row)
-
-  # ── Parse each date row ────────────────────────────────────────────────────
-  for (k in seq_len(nrow(date_rows))) {
-    row_date <- date_rows$date[k]
-    row_num  <- date_rows$row[k]
-
-    row_cells <- cells_by_row[[as.character(row_num)]]
-    if (is.null(row_cells)) next
-
-    for (person in names(STAFF_COL_MAP)) {
-      col_idx <- STAFF_COL_MAP[person]
-      cell    <- row_cells[row_cells$col == col_idx, ]
-      if (nrow(cell) == 0) next
-
-      fmt_id <- cell$local_format_id[1]
-      val    <- tolower(as.character(cell$character[1]))
-      if (is.na(val)) val <- ""
-
-      # CME: orange fill + yellow border on any side
-      if (is_orange_fill(fmt_id) && has_yellow_border(fmt_id)) {
+  # ── Match staff columns by name ───────────────────────────────────────────
+  hdr_lc <- tolower(trimws(hdr))
+  for (person in STAFF) {
+    col_idx <- which(hdr_lc == tolower(person))
+    if (length(col_idx) == 0) {
+      message("NOTE: no column for '", person, "' in time-off source.")
+      next
+    }
+    vals <- as.character(raw[[col_idx[1L]]])
+    for (i in seq_along(dates)) {
+      type <- classify_cell(vals[i])
+      if (!is.na(type))
         result[[person]] <- rbind(result[[person]],
-          data.frame(date = row_date, type = "cme", stringsAsFactors = FALSE))
-        next
-      }
-
-      # Off / Vac: red-ish fill
-      if (is_red_fill(fmt_id)) {
-        is_vac <- any(sapply(VAC_KEYWORDS, function(kw) grepl(kw, val, fixed = TRUE)))
-        type   <- if (is_vac) "vac" else "off"
-        result[[person]] <- rbind(result[[person]],
-          data.frame(date = row_date, type = type, stringsAsFactors = FALSE))
-      }
+          data.frame(date = dates[i], type = type, stringsAsFactors = FALSE))
     }
   }
 
-  # Ensure date column is Date class (rbind can coerce)
-  for (p in STAFF) {
+  for (p in STAFF)
     result[[p]]$date <- as.Date(result[[p]]$date, origin = "1970-01-01")
-  }
 
   result
+}
+
+# ── Source dispatcher ────────────────────────────────────────────────────────
+
+read_timeoff_source <- function(path, sheet) {
+  if (is_sheets_url(path)) return(read_from_gsheets(path, sheet))
+  if (!file.exists(path)) {
+    message("WARNING: '", path, "' not found — proceeding with no time-off data.")
+    return(NULL)
+  }
+  ext <- tolower(tools::file_ext(path))
+  if (ext == "csv") {
+    read.csv(path, header = TRUE, stringsAsFactors = FALSE,
+             check.names = FALSE, na.strings = c("", "NA"))
+  } else {
+    sh <- if (!is.null(sheet)) sheet else 1L
+    tryCatch(
+      openxlsx::read.xlsx(path, sheet = sh, colNames = TRUE,
+                          detectDates = TRUE, na.strings = c("", "NA")),
+      error = function(e) {
+        message("WARNING: could not read '", path, "': ", conditionMessage(e))
+        NULL
+      }
+    )
+  }
+}
+
+# ── Google Sheets reader ─────────────────────────────────────────────────────
+
+is_sheets_url <- function(x) {
+  grepl("docs\\.google\\.com/spreadsheets", x) ||
+  grepl("^1[A-Za-z0-9_-]{20,}$", x)   # raw sheet ID
+}
+
+read_from_gsheets <- function(url_or_id, sheet) {
+  if (!requireNamespace("googlesheets4", quietly = TRUE))
+    stop("Install the 'googlesheets4' package to read Google Sheets directly:\n",
+         "  install.packages('googlesheets4')")
+
+  gs4_auth_auto()
+
+  sh <- if (!is.null(sheet)) sheet else 1L
+  message("Fetching time-off data from Google Sheets...")
+  tryCatch({
+    df <- googlesheets4::read_sheet(url_or_id, sheet = sh,
+                                    col_types = "c")   # everything as character
+    as.data.frame(df, stringsAsFactors = FALSE)
+  }, error = function(e) {
+    message("ERROR reading Google Sheet: ", conditionMessage(e))
+    NULL
+  })
+}
+
+#' Authenticate with googlesheets4.
+#' Tries (in order):
+#'   1. GS_SERVICE_ACCOUNT_JSON env var  (path to JSON file, or JSON string)
+#'   2. GOOGLE_APPLICATION_CREDENTIALS env var  (standard ADC path)
+#'   3. gs4_deauth()  — no auth, works for publicly published sheets
+gs4_auth_auto <- function() {
+  svc_json <- Sys.getenv("GS_SERVICE_ACCOUNT_JSON", unset = "")
+  adc_path <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS", unset = "")
+
+  if (nzchar(svc_json)) {
+    cred <- if (file.exists(svc_json)) svc_json else
+              jsonlite::fromJSON(svc_json)
+    googlesheets4::gs4_auth(path = cred)
+    return(invisible(NULL))
+  }
+  if (nzchar(adc_path) && file.exists(adc_path)) {
+    googlesheets4::gs4_auth(path = adc_path)
+    return(invisible(NULL))
+  }
+  googlesheets4::gs4_deauth()
+}
+
+# ── Cell-level helpers ───────────────────────────────────────────────────────
+
+#' "cme" | "vac" | "off" | NA
+classify_cell <- function(val) {
+  if (is.na(val) || !nzchar(trimws(val))) return(NA_character_)
+  v <- tolower(trimws(val))
+  if (v %in% c("cme", "conf", "conference"))              return("cme")
+  if (v %in% c("vac", "vacation") ||
+      any(vapply(VAC_KEYWORDS,
+                 function(kw) grepl(kw, v, fixed = TRUE),
+                 logical(1L))))                            return("vac")
+  "off"
+}
+
+looks_like_dates <- function(col) {
+  non_na <- col[!is.na(col)]
+  length(non_na) > 0 && (
+    inherits(non_na, "Date") ||
+    all(grepl("^\\d{1,4}[/-]\\d{1,2}[/-]\\d{2,4}$", as.character(non_na)))
+  )
+}
+
+coerce_dates <- function(x) {
+  if (inherits(x, "Date"))   return(x)
+  if (is.numeric(x))         return(as.Date(x, origin = "1899-12-30"))
+  fmts <- c("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y",
+            "%m-%d-%Y", "%m-%d-%y", "%B %d, %Y", "%b %d, %Y")
+  out <- rep(NA_real_, length(x))
+  for (fmt in fmts) {
+    need <- is.na(out)
+    if (!any(need)) break
+    parsed      <- suppressWarnings(as.Date(as.character(x)[need], format = fmt))
+    out[need]   <- as.numeric(parsed)
+  }
+  as.Date(out, origin = "1970-01-01")
 }
