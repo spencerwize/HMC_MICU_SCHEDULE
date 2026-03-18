@@ -2,6 +2,16 @@
 # ui.R  —  Shiny UI  (bslib Bootstrap 5 layout)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Helper must be defined before page_navbar() evaluates the calls below
+legend_chip <- function(color, label) {
+  tags$div(class = "d-flex align-items-center mb-1",
+    tags$div(style = sprintf(
+      "width:14px;height:14px;background:%s;border:1px solid #ccc;
+       border-radius:2px;margin-right:6px;flex-shrink:0;", color)),
+    tags$small(label)
+  )
+}
+
 ui <- page_navbar(
   title = tags$span(
     tags$img(src = "favicon.png", height = "20px",
@@ -239,12 +249,3 @@ ui <- page_navbar(
   header = useShinyjs()
 )
 
-# Helper: color legend chip (defined here so ui.R can call it)
-legend_chip <- function(color, label) {
-  tags$div(class = "d-flex align-items-center mb-1",
-    tags$div(style = sprintf(
-      "width:14px;height:14px;background:%s;border:1px solid #ccc;
-       border-radius:2px;margin-right:6px;flex-shrink:0;", color)),
-    tags$small(label)
-  )
-}
