@@ -32,10 +32,6 @@ HOLIDAYS <- list(
 )
 HOLIDAY_DATES <- as.Date(names(HOLIDAYS))
 
-# PP13 conference block  Jun 22 – Jul 5
-PP13_CONF_START  <- as.Date("2026-06-22")
-PP13_CONF_END    <- as.Date("2026-07-05")
-PP13_CONFERENCE  <- c("John", "Todd", "Mandie", "Maureen")
 
 SLOTS     <- c("APP1", "APP2", "Roaming", "Night")
 DAY_SLOTS <- c("APP1", "APP2", "Roaming")

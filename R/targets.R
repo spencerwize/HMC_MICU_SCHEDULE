@@ -28,12 +28,6 @@ compute_targets <- function(time_off) {
           vac_days <- vac_days[vac_days %in% p_dates]
           cme_days <- cme_days[cme_days %in% p_dates]
 
-          # PP13 conference counts as CME for those 4 people
-          if (person %in% PP13_CONFERENCE) {
-            conf_range <- seq(PP13_CONF_START, PP13_CONF_END, by = "day")
-            new_cme    <- conf_range[conf_range %in% p_dates & !conf_range %in% cme_days]
-            cme_days   <- sort(c(cme_days, new_cme))
-          }
 
           credited <- length(cme_days)
           all_off  <- unique(c(off_days, vac_days, cme_days))

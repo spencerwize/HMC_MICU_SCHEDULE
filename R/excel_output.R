@@ -67,8 +67,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     pdata <- time_off[[person]]
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
-    if (person %in% PP13_CONFERENCE &&
-        d >= PP13_CONF_START && d <= PP13_CONF_END) typ <- "cme"
     if (!is.na(typ)) {
       pp_now  <- get_pp(d)
       pp_info <- if (!is.na(pp_now)) targets[[person]][[pp_now]] else NULL

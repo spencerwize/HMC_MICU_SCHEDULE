@@ -110,8 +110,6 @@ Scheduler <- R6::R6Class("Scheduler",
         m <- pdata[pdata$date == d, ]
         if (nrow(m) > 0 && m$type[1] %in% c("off", "cme")) return(TRUE)
       }
-      if (person %in% PP13_CONFERENCE &&
-          d >= PP13_CONF_START && d <= PP13_CONF_END) return(TRUE)
       FALSE
     },
 
@@ -566,9 +564,6 @@ Scheduler <- R6::R6Class("Scheduler",
             pdata <- time_off[[person]]
             m     <- pdata[pdata$date == d, ]
             typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
-            # Conference override
-            if (person %in% PP13_CONFERENCE &&
-                d >= PP13_CONF_START && d <= PP13_CONF_END) typ <- "cme"
             if (!is.na(typ)) {
               role <- if (typ == "cme") "CME" else
                       if (typ == "off") "OFF" else {

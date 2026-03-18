@@ -163,8 +163,6 @@ server <- function(input, output, session) {
           pdata <- p$time_off[[person]]
           m     <- pdata[pdata$date == cur, ]
           typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
-          if (person %in% PP13_CONFERENCE &&
-              cur >= PP13_CONF_START && cur <= PP13_CONF_END) typ <- "cme"
           if (!is.na(typ)) {
             pp_now  <- get_pp(cur)
             pp_info <- p$targets[[person]][[pp_now]]
