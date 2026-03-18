@@ -321,21 +321,23 @@ Scheduler <- R6::R6Class("Scheduler",
 
         # Force-fill fallback when no candidate passes hard constraints
         if (length(eligible) == 0L) {
-          night_p <- self$schedule[[ds]]$Night
           if (slot == "Night") {
-            eligible <- STAFF[sapply(STAFF, function(p)
-              !self$is_blocked(p, d) && !self$had_night_on(p, d - 1L))]
-          } else {
+            # Night must be filled; relax consecutive limits but NEVER assign
+            # someone who already has a day shift today (non-negotiable).
             eligible <- STAFF[sapply(STAFF, function(p)
               !self$is_blocked(p, d) &&
-              !self$night_recovery_blocked(p, d, for_night = FALSE) &&
-              !self$already_assigned(p, d) &&
-              (is.na(night_p) || night_p != p))]
+              !self$had_night_on(p, d - 1L) &&
+              !self$already_assigned(p, d))]
             if (length(eligible) == 0L)
-              eligible <- STAFF[sapply(STAFF, function(p)
-                !self$is_blocked(p, d) && (is.na(night_p) || night_p != p))]
+              eligible <- STAFF[!sapply(STAFF, function(p)
+                self$already_assigned(p, d))]
+            if (length(eligible) == 0L) eligible <- STAFF
+          } else {
+            # Day slots: skip when no one passes hard constraints.
+            # force_fill_app1() will mop up any remaining APP1 gaps;
+            # empty APP2/Roaming slots are acceptable.
+            next
           }
-          if (length(eligible) == 0L) eligible <- STAFF
         }
 
         # Prefer under-target in this PP
@@ -362,10 +364,10 @@ Scheduler <- R6::R6Class("Scheduler",
     },
 
     #' Try candidates in score order; return the first that does not deadlock
-    #' any unscheduled slot within 3 calendar days. Falls back to top scorer.
+    #' any unscheduled slot within 5 calendar days. Falls back to top scorer.
     pick_no_deadlock = function(ordered_pool, d, slot, todo) {
       near <- todo[vapply(todo, function(x)
-        abs(as.integer(x$d - d)) <= 3L, logical(1L))]
+        abs(as.integer(x$d - d)) <= 5L, logical(1L))]
       if (length(near) == 0L) return(ordered_pool[1L])
 
       for (candidate in ordered_pool) {
@@ -480,15 +482,18 @@ Scheduler <- R6::R6Class("Scheduler",
           })]
         }
 
-        # Fallback 3: anyone not blocked and not on night tonight
+        # Fallback 3: relax night-recovery, but still no double-booking
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
-            !self$is_blocked(p, d) && !self$had_night_on(p, d - 1L) &&
+            !self$is_blocked(p, d) &&
+            !self$already_assigned(p, d) &&
             (is.na(night_p) || night_p != p))]
         }
+        # Fallback 4: last resort — only hard requirement is not on night tonight
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
-            is.na(night_p) || night_p != p)]
+            !self$already_assigned(p, d) &&
+            (is.na(night_p) || night_p != p))]
         }
         if (length(eligible) == 0L) eligible <- STAFF
 
