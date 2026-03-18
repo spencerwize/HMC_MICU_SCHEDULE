@@ -20,16 +20,16 @@ server <- function(input, output, session) {
 
       setProgress(0.35, detail = "Pre-seeding holidays…")
       sched <- Scheduler$new(time_off, targets)
-
-      setProgress(0.45, detail = "Scheduling nights…")
       sched$preseed_holidays()
-      sched$schedule_nights()
 
-      setProgress(0.70, detail = "Scheduling day shifts…")
-      sched$schedule_days()
+      setProgress(0.50, detail = "Scheduling all slots (MRV)…")
+      sched$schedule_all()
 
-      setProgress(0.85, detail = "Cleanup + force-fill…")
+      setProgress(0.82, detail = "Cleanup + swap repair…")
       sched$cleanup_pass()
+      sched$swap_repair_pass()
+
+      setProgress(0.92, detail = "Force-filling APP1…")
       sched$force_fill_app1()
 
       setProgress(0.95, detail = "Validating…")
