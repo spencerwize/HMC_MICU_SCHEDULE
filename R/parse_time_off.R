@@ -165,14 +165,26 @@ gs4_auth_auto <- function() {
 # ── Cell-level helpers ───────────────────────────────────────────────────────
 
 #' "cme" | "vac" | "off" | NA
+#'
+#' Classification rules (evaluated in order; first match wins):
+#'   1. Empty / whitespace / NA  → NA  (available to work, no entry recorded)
+#'   2. Contains a CME keyword as a whole word → "cme"
+#'      Keywords: cme, conf, conference
+#'   3. Contains a VAC keyword as a whole word → "vac"
+#'      Keywords: VAC_KEYWORDS constant
+#'   4. Anything else non-blank → "off"
+#'
+#' Word-boundary (\\b) matching is used for both CME and VAC so that compound
+#' entries like "CME trip" or "conference travel" are classified as CME (not
+#' VAC), because the CME check wins over the VAC check.
 classify_cell <- function(val) {
   if (is.na(val) || !nzchar(trimws(val))) return(NA_character_)
   v <- tolower(trimws(val))
-  if (v %in% c("cme", "conf", "conference"))              return("cme")
-  if (v %in% c("vac", "vacation") ||
-      any(vapply(VAC_KEYWORDS,
-                 function(kw) grepl(kw, v, fixed = TRUE),
-                 logical(1L))))                            return("vac")
+  # CME check — word-boundary regex so "CME trip" still resolves to cme
+  if (grepl("\\b(cme|conf|conference)\\b", v)) return("cme")
+  # VAC check — word-boundary regex on VAC_KEYWORDS
+  vac_pat <- paste0("\\b(", paste(unique(VAC_KEYWORDS), collapse = "|"), ")\\b")
+  if (grepl(vac_pat, v))                       return("vac")
   "off"
 }
 
