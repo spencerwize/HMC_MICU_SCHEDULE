@@ -125,6 +125,47 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   N_STAFF <- length(STAFF)
   N_PP    <- nrow(PAY_PERIODS)
 
+  # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
+  HOLIDAY_NAMES <- c(
+    "2026-05-25" = "Memorial Day",
+    "2026-06-19" = "Juneteenth",
+    "2026-07-04" = "July 4th")
+
+  sched_row_map <- local({
+    rm   <- list()
+    cr   <- 2L   # row 1 = col header; row 2 = first PP header
+    prev <- ""
+    for (d_raw in all_d) {
+      d  <- as.Date(d_raw, origin = "1970-01-01")
+      pp <- get_pp(d)
+      if (!is.na(pp) && pp != prev) { cr <- cr + 1L; prev <- pp }
+      rm[[as.character(d)]] <- cr
+      cr <- cr + 2L
+    }
+    rm
+  })
+
+  # Calendar formula helpers (schedule col I = staff[1], R = staff[10])
+  cal_role_formula <- function(dr, nr) {
+    D <- sprintf("Schedule!$I$%d:$R$%d", dr, dr)
+    N <- sprintf("Schedule!$I$%d:$R$%d", nr, nr)
+    M <- "MATCH($C$2,Schedule!$I$1:$R$1,0)"
+    sprintf(
+      paste0('IF(IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),',
+             'INDEX(%s,1,%s)),"")=0,"",IFERROR(IF(INDEX(%s,1,%s)<>"",',
+             'INDEX(%s,1,%s),INDEX(%s,1,%s)),""))'),
+      D,M,D,M,N,M, D,M,D,M,N,M)
+  }
+
+  cal_hol_formula <- function(dr, nr, hol_name) {
+    D <- sprintf("Schedule!$I$%d:$R$%d", dr, dr)
+    N <- sprintf("Schedule!$I$%d:$R$%d", nr, nr)
+    M <- "MATCH($C$2,Schedule!$I$1:$R$1,0)"
+    sprintf(
+      '"%s  "&IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),INDEX(%s,1,%s)),"")',
+      hol_name, D,M,D,M,N,M)
+  }
+
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 1 · Calendar
   # ════════════════════════════════════════════════════════════════════════════
@@ -133,38 +174,34 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   setColWidths(wb, "Calendar", cols = 2:8, widths = rep(13.0, 7))
   setColWidths(wb, "Calendar", cols = 9,   widths = 2.0)
 
-  # Title
+  # Row 1: Title
   mergeCells(wb, "Calendar", cols = 2:8, rows = 1)
   writeData(wb, "Calendar",
     x = "APP Staff Schedule \u00B7 Apr 13 \u2013 Jul 19, 2026",
     startRow = 1, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
-    mk(fg = C_NAVY, bold = TRUE, size = 14, font_color = F_WHITE),
+    mk(fg = C_NAVY, bold = TRUE, size = 13, font_color = F_WHITE),
     rows = 1, cols = 2:8)
-  setRowHeights(wb, "Calendar", rows = 1, heights = 28)
+  setRowHeights(wb, "Calendar", rows = 1, heights = 27.75)
 
-  # Staff selector row
+  # Row 2: Staff selector
   writeData(wb, "Calendar", x = "Staff member:",
     startRow = 2, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
-    mk(fg = C_BLUE_LT, bold = TRUE, font_color = F_NAVY, halign = "right"),
+    mk(fg = "#DAE3F3", bold = TRUE, font_color = F_NAVY, halign = "right"),
     rows = 2, cols = 2)
   mergeCells(wb, "Calendar", cols = 3:5, rows = 2)
   writeData(wb, "Calendar", x = STAFF[1],
     startRow = 2, startCol = 3, colNames = FALSE)
   addStyle(wb, "Calendar",
-    mk(fg = C_BLUE_LT, font_color = F_NAVY, halign = "left"),
+    mk(fg = "#DAE3F3", bold = TRUE, font_color = F_NAVY, size = 12),
     rows = 2, cols = 3:5)
   dataValidation(wb, "Calendar", col = 3, rows = 2, type = "list",
     value = paste0('"', paste(STAFF, collapse = ","), '"'))
-  mergeCells(wb, "Calendar", cols = 6:8, rows = 2)
-  writeData(wb, "Calendar",
-    x = "(Dynamic view available in the Shiny app)",
-    startRow = 2, startCol = 6, colNames = FALSE)
   addStyle(wb, "Calendar",
-    mk(fg = C_BLUE_LT, font_color = "#888888", size = 8, halign = "left"),
+    mk(fg = "#DAE3F3", font_color = "#888888", size = 8, halign = "left"),
     rows = 2, cols = 6:8)
-  setRowHeights(wb, "Calendar", rows = 3, heights = 6)
+  setRowHeights(wb, "Calendar", rows = c(2L, 3L), heights = c(25.5, 6.0))
 
   months_list <- list(
     list(year = 2026L, month = 4L, label = "April 2026"),
@@ -180,100 +217,130 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     last_d  <- as.Date(sprintf("%d-%02d-01",
       mo$year + (mo$month == 12L), (mo$month %% 12L) + 1L)) - 1L
 
-    # Month header
+    # Month header row
     mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
     writeData(wb, "Calendar", x = mo$label,
       startRow = cal_row, startCol = 2, colNames = FALSE)
     addStyle(wb, "Calendar",
-      mk(fg = C_BLUE_LT, bold = TRUE, font_color = F_NAVY, size = 12),
+      mk(fg = C_BLUE_LT, bold = TRUE, font_color = F_NAVY, size = 11),
       rows = cal_row, cols = 2:8)
-    setRowHeights(wb, "Calendar", rows = cal_row, heights = 20)
+    setRowHeights(wb, "Calendar", rows = cal_row, heights = 19.5)
     cal_row <- cal_row + 1L
 
-    # Day-of-week header
+    # DOW header row
     for (ci in seq_along(dow_lbl)) {
       writeData(wb, "Calendar", x = dow_lbl[ci],
         startRow = cal_row, startCol = ci + 1L, colNames = FALSE)
       addStyle(wb, "Calendar",
-        mk(fg = C_NAVY, bold = TRUE, font_color = F_WHITE,
-           border = "All", border_color = F_WHITE),
+        mk(fg = "#203864", bold = TRUE, font_color = F_WHITE, size = 9,
+           border = "All", border_color = F_NAVY),
         rows = cal_row, cols = ci + 1L)
     }
-    setRowHeights(wb, "Calendar", rows = cal_row, heights = 18)
+    setRowHeights(wb, "Calendar", rows = cal_row, heights = 15.75)
     cal_row <- cal_row + 1L
 
-    start_dow     <- as.integer(format(first_d, "%w"))
-    wk_date_row   <- cal_row
-    wk_role_row   <- cal_row + 1L
-    col           <- start_dow + 2L
-    cur           <- first_d
+    # Iterate weeks (Sunday-anchored)
+    first_sunday <- first_d - as.integer(format(first_d, "%w"))
+    cur_sunday   <- first_sunday
 
-    while (cur <= last_d) {
-      if (col > 8L) {
-        col         <- 2L
-        wk_date_row <- wk_date_row + 2L
-        wk_role_row <- wk_role_row + 2L
+    while (cur_sunday <= last_d) {
+      date_row <- cal_row
+      role_row <- cal_row + 1L
+
+      for (dow in 0:6) {
+        cur <- cur_sunday + as.integer(dow)
+        col <- dow + 2L  # Sun=2(B) … Sat=8(H)
+        is_wknd   <- dow %in% c(0L, 6L)
+        in_month  <- cur >= first_d  && cur <= last_d
+        in_sched  <- cur >= SCHEDULE_START && cur <= SCHEDULE_END
+        is_hol    <- cur %in% HOLIDAY_DATES
+
+        if (!in_month || !in_sched) {
+          # Out-of-month or pre-schedule — style empty gray cells
+          bg <- if (!in_month || !in_sched && !in_month) "#F7F7F7"
+                else if (is_wknd) C_LAVENDER else "#FFFFFF"
+          if (!in_month) bg <- "#F7F7F7"
+          fc_num <- if (in_month && !in_sched) F_LGRAY else F_LGRAY
+          if (in_month && !in_sched) {
+            # In month but before/after schedule: show date grayed out
+            writeData(wb, "Calendar", x = as.integer(format(cur, "%d")),
+              startRow = date_row, startCol = col, colNames = FALSE)
+          }
+          addStyle(wb, "Calendar",
+            mk(fg = "#F7F7F7", font_color = F_LGRAY, size = 8,
+               halign = "left", valign = "center",
+               border = "All", border_color = "#D0D0D0"),
+            rows = date_row, cols = col)
+          addStyle(wb, "Calendar",
+            mk(fg = "#F7F7F7", size = 10, wrap = TRUE,
+               border = "All", border_color = "#D0D0D0"),
+            rows = role_row, cols = col)
+        } else {
+          # In-schedule date
+          bg_d  <- if (is_hol) C_YELLOW else if (is_wknd) C_LAVENDER else "#FFFFFF"
+          fc_d  <- if (is_hol) F_GOLD else "#555555"
+          bg_r  <- bg_d  # role row background = same as date row
+
+          # Date number cell
+          writeData(wb, "Calendar", x = as.integer(format(cur, "%d")),
+            startRow = date_row, startCol = col, colNames = FALSE)
+          addStyle(wb, "Calendar",
+            mk(fg = bg_d, font_color = fc_d, size = 8,
+               halign = "left", valign = "center",
+               border = "All", border_color = "#D0D0D0"),
+            rows = date_row, cols = col)
+
+          # Role cell — Excel formula (dynamic, responds to C2 dropdown)
+          ds  <- as.character(cur)
+          dr  <- sched_row_map[[ds]]
+          nr  <- dr + 1L
+          fml <- if (is_hol) {
+            hn <- HOLIDAY_NAMES[format(cur, "%Y-%m-%d")]
+            cal_hol_formula(dr, nr, hn)
+          } else {
+            cal_role_formula(dr, nr)
+          }
+          writeFormula(wb, "Calendar", x = fml,
+            startRow = role_row, startCol = col)
+          addStyle(wb, "Calendar",
+            mk(fg = bg_r, bold = TRUE, font_color = F_BLUE, size = 10,
+               halign = "center", valign = "center",
+               border = "All", border_color = "#D0D0D0", wrap = TRUE),
+            rows = role_row, cols = col)
+        }
       }
 
-      in_sched <- cur >= SCHEDULE_START && cur <= SCHEDULE_END
-      is_hol   <- cur %in% HOLIDAY_DATES
-      is_wknd  <- as.integer(format(cur, "%w")) %in% c(0L, 6L)
-
-      bg_d <- if (!in_sched) "#F7F7F7"
-              else if (is_hol) C_YELLOW
-              else if (is_wknd) C_LAVENDER
-              else "#FFFFFF"
-      fc_d <- if (!in_sched) F_LGRAY else if (is_hol) F_GOLD else "#555555"
-
-      # Date number cell
-      writeData(wb, "Calendar", x = as.integer(format(cur, "%d")),
-        startRow = wk_date_row, startCol = col, colNames = FALSE)
-      addStyle(wb, "Calendar",
-        mk(fg = bg_d, font_color = fc_d, size = 9,
-           border = "All", border_color = "#DDDDDD"),
-        rows = wk_date_row, cols = col)
-
-      # Assignment cell (shows first staff member)
-      role_val <- if (in_sched) {
-        rv <- role_lookup[[as.character(cur)]][[STAFF[1]]]
-        if (is.na(rv)) "" else rv
-      } else ""
-      cell_bg <- if (in_sched) { rb <- role_bg(role_val, is_hol); if (is.null(rb)) bg_d else rb }
-                 else bg_d
-      cell_fc <- if (nchar(role_val) > 0) role_fc(role_val) else fc_d
-
-      writeData(wb, "Calendar", x = role_val,
-        startRow = wk_role_row, startCol = col, colNames = FALSE)
-      addStyle(wb, "Calendar",
-        mk(fg = cell_bg, bold = nchar(role_val) > 0, font_color = cell_fc,
-           size = 9, border = "All", border_color = "#DDDDDD"),
-        rows = wk_role_row, cols = col)
-
-      cur <- cur + 1L
-      col <- col + 1L
+      setRowHeights(wb, "Calendar", rows = date_row, heights = 12.75)
+      setRowHeights(wb, "Calendar", rows = role_row, heights = 21.75)
+      cal_row    <- cal_row + 2L
+      cur_sunday <- cur_sunday + 7L
     }
 
-    setRowHeights(wb, "Calendar",
-      rows = seq(cal_row, wk_date_row, by = 2L),
-      heights = rep(15, length(seq(cal_row, wk_date_row, by = 2L))))
-    setRowHeights(wb, "Calendar",
-      rows = seq(cal_row + 1L, wk_role_row, by = 2L),
-      heights = rep(18, length(seq(cal_row + 1L, wk_role_row, by = 2L))))
-
-    cal_row <- wk_date_row + 3L  # pair + spacer
+    # Inter-month spacer
+    setRowHeights(wb, "Calendar", rows = cal_row, heights = 7.5)
+    cal_row <- cal_row + 1L
   }
 
-  # Legend
+  # Legend rows (matches reference rows 59-60)
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
-    x = paste0("\u25A0 Working (APP1/APP2/Roam) = green  ",
-               "\u25A0 Night = blue  \u25A0 OFF = pink  ",
-               "\u25A0 VAC = peach  \u25A0 PTO = pink-red  ",
-               "\u25A0 CME = orange  \u25A0 Holiday = yellow"),
+    x = paste0("APP1 / APP2 = day shift  \u00B7  Roam = roaming APP  ",
+               "\u00B7  Night = night shift  \u00B7  VAC = vacation  ",
+               "\u00B7  PTO = PTO used  \u00B7  CME = conference"),
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
-    mk(fg = C_CREAM, font_color = "#888888", size = 8, halign = "left"),
+    mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
     rows = cal_row, cols = 2:8)
+  setRowHeights(wb, "Calendar", rows = cal_row, heights = 13.5)
+  cal_row <- cal_row + 1L
+  mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
+  writeData(wb, "Calendar",
+    x = "OFF = not scheduled  \u00B7  Select staff member in cell C2 to change the view",
+    startRow = cal_row, startCol = 2, colNames = FALSE)
+  addStyle(wb, "Calendar",
+    mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
+    rows = cal_row, cols = 2:8)
+  setRowHeights(wb, "Calendar", rows = cal_row, heights = 15.75)
 
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 2 · Summary
