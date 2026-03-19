@@ -223,19 +223,17 @@ Scheduler <- R6::R6Class("Scheduler",
     # ── Scoring ───────────────────────────────────────────────────────────────
 
     #' Night score — lower is preferred.
-    #' Returns named list(priority, total, pp) for lexicographic sort.
+    #' Returns named list(priority, total) for lexicographic sort.
     #' priority: 0 = streak continuation, 1 = fresh start, 2 = had day shift yesterday
     night_score = function(person, d) {
       nights    <- self$person_nights[[person]]
       is_cont   <- (d - 1L) %in% nights
-      pp        <- get_pp(d)
-      pp_nights <- if (!is.na(pp)) sum(get_pp_vec(nights) == pp, na.rm = TRUE) else 0L
       # Penalise day-before-night: if person already has a day shift on d-1
       had_day_prev <- any(sapply(DAY_SLOTS, function(s) {
         v <- self$get_slot(d - 1L, s); !is.na(v) && v == person
       }))
       priority <- if (is_cont) 0L else if (had_day_prev) 2L else 1L
-      list(priority = priority, total = length(nights), pp = pp_nights)
+      list(priority = priority, total = length(nights))
     },
 
     #' Day score — higher is preferred.
@@ -360,8 +358,7 @@ Scheduler <- R6::R6Class("Scheduler",
         if (slot == "Night") {
           sc  <- lapply(pool, function(p) self$night_score(p, d))
           ord <- order(sapply(sc, `[[`, "priority"),
-                       sapply(sc, `[[`, "total"),
-                       sapply(sc, `[[`, "pp"))
+                       sapply(sc, `[[`, "total"))
         } else {
           sc  <- sapply(pool, function(p) self$day_score(p, d, slot))
           ord <- order(-sc)
