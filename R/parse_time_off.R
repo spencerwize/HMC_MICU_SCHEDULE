@@ -40,6 +40,17 @@ parse_time_off <- function(path, sheet = NULL) {
   result <- setNames(lapply(STAFF, function(p) empty_df()), STAFF)
 
   raw <- read_timeoff_source(path, sheet)
+
+  # If the remote source failed, fall back to the local XLSX
+  if ((is.null(raw) || nrow(raw) == 0) &&
+      (is_sheets_url(path) || is_sheets_csv_url(path))) {
+    local_xlsx <- "Time_Off_Requests.xlsx"
+    if (file.exists(local_xlsx)) {
+      message("Remote source unavailable — falling back to ", local_xlsx)
+      raw <- read_timeoff_source(local_xlsx, sheet)
+    }
+  }
+
   if (is.null(raw) || nrow(raw) == 0) return(result)
 
   # ── Locate Date column ────────────────────────────────────────────────────
@@ -107,6 +118,17 @@ parse_time_off <- function(path, sheet = NULL) {
 # ── Source dispatcher ────────────────────────────────────────────────────────
 
 read_timeoff_source <- function(path, sheet) {
+  # "Publish to web" CSV or /export?format=csv — no auth needed
+  if (is_sheets_csv_url(path)) {
+    message("Fetching CSV from Google Sheets public URL...")
+    return(tryCatch(
+      read.csv(path, header = TRUE, stringsAsFactors = FALSE,
+               check.names = FALSE, na.strings = c("", "NA")),
+      error = function(e) {
+        message("ERROR fetching CSV: ", conditionMessage(e)); NULL
+      }
+    ))
+  }
   if (is_sheets_url(path)) return(read_from_gsheets(path, sheet))
   if (!file.exists(path)) {
     message("WARNING: '", path, "' not found — proceeding with no time-off data.")
@@ -131,8 +153,15 @@ read_timeoff_source <- function(path, sheet) {
 
 # ── Google Sheets reader ─────────────────────────────────────────────────────
 
+#' TRUE for Google Sheets "Publish to web" CSV or /export?format=csv URLs
+#' (no auth needed — routed to read.csv instead of the API)
+is_sheets_csv_url <- function(x) {
+  grepl("docs\\.google\\.com/spreadsheets", x) &&
+  (grepl("[?&]format=csv", x) || grepl("pub\\?.*output=csv", x))
+}
+
 is_sheets_url <- function(x) {
-  grepl("docs\\.google\\.com/spreadsheets", x) ||
+  (grepl("docs\\.google\\.com/spreadsheets", x) && !is_sheets_csv_url(x)) ||
   grepl("^1[A-Za-z0-9_-]{20,}$", x)   # raw sheet ID
 }
 
@@ -150,7 +179,16 @@ read_from_gsheets <- function(url_or_id, sheet) {
                                     col_types = "c")   # everything as character
     as.data.frame(df, stringsAsFactors = FALSE)
   }, error = function(e) {
-    message("ERROR reading Google Sheet: ", conditionMessage(e))
+    msg <- conditionMessage(e)
+    message("ERROR reading Google Sheet: ", msg)
+    if (grepl("403|PERMISSION_DENIED|permission", msg, ignore.case = TRUE)) {
+      message(
+        "  \u2192 The sheet is private and no credentials are configured.\n",
+        "  \u2192 Quick fix: File \u2192 Share \u2192 Publish to web \u2192 CSV,\n",
+        "    then set TIMEOFF_SOURCE to that URL (ends with pub?output=csv).\n",
+        "  \u2192 Or set GS_SERVICE_ACCOUNT_JSON to your service-account key path."
+      )
+    }
     NULL
   })
 }

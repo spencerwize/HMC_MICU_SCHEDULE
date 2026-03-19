@@ -103,12 +103,12 @@ Scheduler <- R6::R6Class("Scheduler",
 
     # ── Eligibility helpers ───────────────────────────────────────────────────
 
-    #' TRUE if person cannot work at all on date d (off/cme/conference)
+    #' TRUE if person cannot work at all on date d (off/vac/cme)
     is_blocked = function(person, d) {
       pdata <- self$time_off[[person]]
       if (nrow(pdata) > 0) {
         m <- pdata[pdata$date == d, ]
-        if (nrow(m) > 0 && m$type[1] %in% c("off", "cme")) return(TRUE)
+        if (nrow(m) > 0 && m$type[1] %in% c("off", "vac", "cme")) return(TRUE)
       }
       FALSE
     },
