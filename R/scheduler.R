@@ -1,15 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # scheduler.R  —  R6 Scheduler class
 #
-# Hard constraints enforced (never violated):
-#   1. APP1 always filled
-#   2. Every night staffed
+# Hard constraints enforced:
+#   1. APP1 always filled (last resort: may be left empty if all at shift cap)
+#   2. Every night staffed (last resort: may be left empty if all at shift cap)
 #   3. No day-shift morning after night (d+1 after night d)
 #   4. Night recovery: blocked d+1 and d+2 after LAST night of streak (d+3 eligible)
 #   5. Max 3 consecutive nights
 #   6. Max 4 consecutive working days
 #   7. No day-to-night same calendar day
-#   8. PP shift targets respected
+#   8. Hard shift cap: no one scheduled beyond sched_target (≤ 6 clinical shifts/PP)
 # ─────────────────────────────────────────────────────────────────────────────
 
 Scheduler <- R6::R6Class("Scheduler",
@@ -164,6 +164,10 @@ Scheduler <- R6::R6Class("Scheduler",
 
     can_work_night = function(person, d) {
       if (self$is_blocked(person, d))                                 return(FALSE)
+      pp <- get_pp(d)
+      if (!is.na(pp) &&
+          self$pp_counts[[person]][[pp]] >=
+          self$targets[[person]][[pp]]$sched_target) return(FALSE)
       if (self$night_recovery_blocked(person, d, for_night = TRUE))   return(FALSE)
       ds       <- as.character(d)
       day_data <- self$schedule[[ds]]
@@ -192,6 +196,10 @@ Scheduler <- R6::R6Class("Scheduler",
 
     can_work_day = function(person, d) {
       if (self$is_blocked(person, d))                                 return(FALSE)
+      pp <- get_pp(d)
+      if (!is.na(pp) &&
+          self$pp_counts[[person]][[pp]] >=
+          self$targets[[person]][[pp]]$sched_target) return(FALSE)
       if (self$night_recovery_blocked(person, d, for_night = FALSE))  return(FALSE)
       if (self$already_assigned(person, d))                           return(FALSE)
       if (self$consec_days_if_added(person, d) > 4L)                  return(FALSE)
@@ -320,16 +328,20 @@ Scheduler <- R6::R6Class("Scheduler",
         # Force-fill fallback when no candidate passes hard constraints
         if (length(eligible) == 0L) {
           if (slot == "Night") {
-            # Night must be filled; relax consecutive limits but NEVER assign
-            # someone who already has a day shift today (non-negotiable).
+            # Relax consecutive/recovery limits; still respect ≤ sched_target cap
+            under_cap <- function(p) {
+              pp2 <- get_pp(d)
+              is.na(pp2) || self$pp_counts[[p]][[pp2]] <
+                            self$targets[[p]][[pp2]]$sched_target
+            }
             eligible <- STAFF[sapply(STAFF, function(p)
-              !self$is_blocked(p, d) &&
-              !self$had_night_on(p, d - 1L) &&
-              !self$already_assigned(p, d))]
+              under_cap(p) && !self$is_blocked(p, d) &&
+              !self$had_night_on(p, d - 1L) && !self$already_assigned(p, d))]
             if (length(eligible) == 0L)
-              eligible <- STAFF[!sapply(STAFF, function(p)
-                self$already_assigned(p, d))]
-            if (length(eligible) == 0L) eligible <- STAFF
+              eligible <- STAFF[sapply(STAFF, function(p)
+                under_cap(p) && !self$already_assigned(p, d))]
+            # 2nd last-ditch: truly no one under cap → leave Night unstaffed
+            if (length(eligible) == 0L) next
           } else {
             # Day slots: skip when no one passes hard constraints.
             # force_fill_app1() will mop up any remaining APP1 gaps;
@@ -463,16 +475,21 @@ Scheduler <- R6::R6Class("Scheduler",
         d  <- as.Date(d, origin = "1970-01-01")  # for() strips Date class
         ds <- as.character(d)
         if (!is.na(self$schedule[[ds]]$APP1)) next
-        pp <- get_pp(d)
-
+        pp      <- get_pp(d)
         night_p <- self$schedule[[ds]]$Night
 
-        # Fallback 1 (preferred): full hard-constraint check
+        under_cap <- function(p) {
+          is.na(pp) || self$pp_counts[[p]][[pp]] <
+                       self$targets[[p]][[pp]]$sched_target
+        }
+
+        # Fallback 1 (preferred): full hard-constraint check (cap baked into can_work_day)
         eligible <- STAFF[sapply(STAFF, function(p) self$can_work_day(p, d))]
 
-        # Fallback 2: relax consecutive-day limit but keep night recovery
+        # Fallback 2: relax consecutive-day limit; keep night recovery + cap
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p) {
+            under_cap(p) &&
             !self$is_blocked(p, d) &&
             !self$night_recovery_blocked(p, d, for_night = FALSE) &&
             !self$already_assigned(p, d) &&
@@ -480,20 +497,30 @@ Scheduler <- R6::R6Class("Scheduler",
           })]
         }
 
-        # Fallback 3: relax night-recovery, but still no double-booking
+        # Fallback 3: relax night-recovery; keep cap + no double-booking
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
+            under_cap(p) &&
             !self$is_blocked(p, d) &&
             !self$already_assigned(p, d) &&
             (is.na(night_p) || night_p != p))]
         }
-        # Fallback 4: last resort — only hard requirement is not on night tonight
+
+        # Fallback 4: relax all clinical constraints; keep cap + no double-booking
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
+            under_cap(p) &&
             !self$already_assigned(p, d) &&
             (is.na(night_p) || night_p != p))]
         }
-        if (length(eligible) == 0L) eligible <- STAFF
+
+        # Fallback 5: relax double-booking check; still under cap
+        if (length(eligible) == 0L) {
+          eligible <- STAFF[sapply(STAFF, function(p) under_cap(p))]
+        }
+
+        # 1st last-ditch: no one under cap → leave APP1 empty (understaffed day)
+        if (length(eligible) == 0L) next
 
         # Prefer least-loaded person in this PP
         counts <- sapply(eligible, function(p)
