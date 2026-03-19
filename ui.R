@@ -39,14 +39,12 @@ ui <- page_navbar(
         width = 280,
         bg    = "#f5f7fa",
         tags$h6("Time-Off Data", class = "text-muted mt-2"),
-        fileInput("tof_file", NULL,
-          accept      = ".xlsx",
-          placeholder = "Time_Off_Requests.xlsx",
-          buttonLabel = "Browse…"
+        selectInput("sheet_select", "Sheet:",
+          choices  = c("Loading…" = ""),
+          selected = ""
         ),
         tags$small(class = "text-muted",
-          "Upload the time-off workbook to import off/vacation/CME days. ",
-          "Schedule will run with zero time-off data if omitted."
+          "Select the pay-period sheet from the Google Sheet."
         ),
         hr(),
         actionButton("run_btn", "Generate Schedule",

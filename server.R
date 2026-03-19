@@ -4,17 +4,33 @@
 
 server <- function(input, output, session) {
 
+  # ── Populate sheet dropdown on startup ────────────────────────────────────
+  observe({
+    sheet_names <- tryCatch({
+      gs4_auth_auto()
+      googlesheets4::sheet_names(TIMEOFF_GSHEET_URL)
+    }, error = function(e) {
+      message("Could not fetch sheet names: ", conditionMessage(e))
+      character(0)
+    })
+    if (length(sheet_names) > 0) {
+      updateSelectInput(session, "sheet_select",
+        choices  = sheet_names,
+        selected = sheet_names[1]
+      )
+    } else {
+      updateSelectInput(session, "sheet_select",
+        choices = c("(unavailable)" = "")
+      )
+    }
+  })
+
   # ── Reactive pipeline ──────────────────────────────────────────────────────
   pipeline <- eventReactive(input$run_btn, {
     withProgress(message = "Building schedule…", value = 0, {
       setProgress(0.1, detail = "Parsing time-off data…")
-      # Priority: uploaded file > TIMEOFF_SOURCE env var > local fallback
-      tof_source <- if (!is.null(input$tof_file)) {
-        input$tof_file$datapath
-      } else {
-        TIMEOFF_DEFAULT_SOURCE
-      }
-      time_off <- parse_time_off(tof_source)
+      selected_sheet <- if (nzchar(input$sheet_select)) input$sheet_select else NULL
+      time_off <- parse_time_off(TIMEOFF_GSHEET_URL, sheet = selected_sheet)
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)

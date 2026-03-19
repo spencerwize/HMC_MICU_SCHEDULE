@@ -29,11 +29,12 @@ r_files <- c(
 )
 for (f in r_files) source(f, local = FALSE)
 
-# ── Default time-off source ───────────────────────────────────────────────────
-# Set env var TIMEOFF_SOURCE to a Google Sheets URL (or bare sheet ID) to pull
-# live data without any file upload.  Falls back to the local XLSX if unset.
+# ── Google Sheets source ──────────────────────────────────────────────────────
+TIMEOFF_GSHEET_URL <- "https://docs.google.com/spreadsheets/d/1pjme5ne-O7XdM4aDfliJo65QjcdjbHebk87jmhIX3VI/edit"
+
+# Legacy env-var fallback (used by run_schedule.R)
 TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
-                                     unset = "Time_Off_Requests.xlsx")
+                                     unset = TIMEOFF_GSHEET_URL)
 
 # ── Run the full pipeline and return a named list ─────────────────────────────
 run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
