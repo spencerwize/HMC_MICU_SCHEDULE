@@ -70,6 +70,9 @@ parse_time_off <- function(path, sheet = NULL) {
   hdr_lc <- tolower(trimws(hdr))
   for (person in STAFF) {
     col_idx <- which(hdr_lc == tolower(person))
+    # Fallback: match any header that starts with the person's first name
+    if (length(col_idx) == 0)
+      col_idx <- which(startsWith(hdr_lc, tolower(person)))
     if (length(col_idx) == 0) {
       message("NOTE: no column for '", person, "' in time-off source.")
       next
@@ -85,6 +88,18 @@ parse_time_off <- function(path, sheet = NULL) {
 
   for (p in STAFF)
     result[[p]]$date <- as.Date(result[[p]]$date, origin = "1970-01-01")
+
+  # ── Diagnostic summary ────────────────────────────────────────────────────
+  message("Time-off parse summary (",
+          format(SCHEDULE_START, "%b %d"), " \u2013 ",
+          format(SCHEDULE_END,   "%b %d"), "):")
+  for (p in STAFF) {
+    df    <- result[[p]]
+    n_off <- sum(df$type == "off", na.rm = TRUE)
+    n_vac <- sum(df$type == "vac", na.rm = TRUE)
+    n_cme <- sum(df$type == "cme", na.rm = TRUE)
+    message(sprintf("  %-10s  off=%d  vac=%d  cme=%d", p, n_off, n_vac, n_cme))
+  }
 
   result
 }
@@ -197,8 +212,9 @@ looks_like_dates <- function(col) {
 }
 
 coerce_dates <- function(x) {
-  if (inherits(x, "Date"))   return(x)
-  if (is.numeric(x))         return(as.Date(x, origin = "1899-12-30"))
+  if (inherits(x, "Date"))                  return(x)
+  if (inherits(x, c("POSIXct","POSIXlt"))) return(as.Date(x))
+  if (is.numeric(x))                        return(as.Date(x, origin = "1899-12-30"))
   fmts <- c("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y",
             "%m-%d-%Y", "%m-%d-%y", "%B %d, %Y", "%b %d, %Y")
   out <- rep(NA_real_, length(x))
