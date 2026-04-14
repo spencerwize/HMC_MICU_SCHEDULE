@@ -5,24 +5,18 @@
 server <- function(input, output, session) {
 
   # ── Populate sheet dropdown on startup ────────────────────────────────────
+  # Tries to refresh tab names live from the API; falls back to TIMEOFF_SHEETS
+  # so the dropdown is always usable even without API auth.
   observe({
     sheet_names <- tryCatch({
       gs4_auth_auto()
       googlesheets4::sheet_names(TIMEOFF_GSHEET_URL)
     }, error = function(e) {
-      message("Could not fetch sheet names: ", conditionMessage(e))
-      character(0)
+      message("Could not fetch sheet names from API — using default list.")
+      TIMEOFF_SHEETS
     })
-    if (length(sheet_names) > 0) {
-      updateSelectInput(session, "sheet_select",
-        choices  = sheet_names,
-        selected = sheet_names[1]
-      )
-    } else {
-      updateSelectInput(session, "sheet_select",
-        choices = c("(unavailable)" = "")
-      )
-    }
+    # Omit `selected` so the user's current choice (or the ui.R default) is kept
+    updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
 
   # ── Reactive pipeline ──────────────────────────────────────────────────────

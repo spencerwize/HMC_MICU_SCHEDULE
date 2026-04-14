@@ -32,6 +32,10 @@ for (f in r_files) source(f, local = FALSE)
 # ── Google Sheets source ──────────────────────────────────────────────────────
 TIMEOFF_GSHEET_URL <- "https://docs.google.com/spreadsheets/d/1pjme5ne-O7XdM4aDfliJo65QjcdjbHebk87jmhIX3VI/edit"
 
+# Known tab names in the Google Sheet — pre-populates the sheet dropdown so
+# it works immediately without API auth. Add/remove names to match the workbook.
+TIMEOFF_SHEETS <- c("Present")
+
 # Legacy env-var fallback (used by run_schedule.R)
 TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
                                      unset = TIMEOFF_GSHEET_URL)

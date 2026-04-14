@@ -40,8 +40,8 @@ ui <- page_navbar(
         bg    = "#f5f7fa",
         tags$h6("Time-Off Data", class = "text-muted mt-2"),
         selectInput("sheet_select", "Sheet:",
-          choices  = c("Loading…" = ""),
-          selected = ""
+          choices  = TIMEOFF_SHEETS,
+          selected = TIMEOFF_SHEETS[1]
         ),
         tags$small(class = "text-muted",
           "Select the pay-period sheet from the Google Sheet."
