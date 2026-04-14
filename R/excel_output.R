@@ -124,10 +124,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   N_PP    <- nrow(PAY_PERIODS)
 
   # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
-  HOLIDAY_NAMES <- c(
-    "2026-05-25" = "Memorial Day",
-    "2026-06-19" = "Juneteenth",
-    "2026-07-04" = "July 4th")
+  # HOLIDAY_NAMES comes from the global set by server.R when the sheet config
+  # is applied — no hardcoding needed here.
 
   sched_row_map <- local({
     rm   <- list()
@@ -143,11 +141,22 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     rm
   })
 
-  # Calendar formula helpers (schedule col I = staff[1], R = staff[10])
+  # Calendar formula helpers — column range is derived from N_STAFF so that
+  # adding/removing staff doesn't break the formulas.
+  # Schedule sheet: cols 1-8 are fixed headers; staff start at col 9 (I).
+  col_letter <- function(n) {
+    if (n <= 26L) LETTERS[n]
+    else paste0(LETTERS[(n - 1L) %/% 26L], LETTERS[(n - 1L) %% 26L + 1L])
+  }
+  SCHED_STAFF_START <- 9L                        # column I
+  SCHED_STAFF_END   <- 8L + N_STAFF              # dynamic (R for 10, P for 8, etc.)
+  S_LTR  <- col_letter(SCHED_STAFF_START)        # "I"
+  E_LTR  <- col_letter(SCHED_STAFF_END)          # dynamic
+
   cal_role_formula <- function(dr, nr) {
-    D <- sprintf("Schedule!$I$%d:$R$%d", dr, dr)
-    N <- sprintf("Schedule!$I$%d:$R$%d", nr, nr)
-    M <- "MATCH($C$2,Schedule!$I$1:$R$1,0)"
+    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, dr, E_LTR, dr)
+    N <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, nr, E_LTR, nr)
+    M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
     sprintf(
       paste0('IF(IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),',
              'INDEX(%s,1,%s)),"")=0,"",IFERROR(IF(INDEX(%s,1,%s)<>"",',
@@ -156,9 +165,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   }
 
   cal_hol_formula <- function(dr, nr, hol_name) {
-    D <- sprintf("Schedule!$I$%d:$R$%d", dr, dr)
-    N <- sprintf("Schedule!$I$%d:$R$%d", nr, nr)
-    M <- "MATCH($C$2,Schedule!$I$1:$R$1,0)"
+    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, dr, E_LTR, dr)
+    N <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, nr, E_LTR, nr)
+    M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
     sprintf(
       '"%s  "&IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),INDEX(%s,1,%s)),"")',
       hol_name, D,M,D,M,N,M)
@@ -175,7 +184,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # Row 1: Title
   mergeCells(wb, "Calendar", cols = 2:8, rows = 1)
   writeData(wb, "Calendar",
-    x = "APP Staff Schedule \u00B7 Apr 13 \u2013 Jul 19, 2026",
+    x = sprintf("APP Staff Schedule \u00B7 %s \u2013 %s",
+                format(SCHEDULE_START, "%b %d"),
+                format(SCHEDULE_END,   "%b %d, %Y")),
     startRow = 1, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = C_NAVY, bold = TRUE, size = 13, font_color = F_WHITE),
@@ -201,11 +212,20 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     rows = 2, cols = 6:8)
   setRowHeights(wb, "Calendar", rows = c(2L, 3L), heights = c(25.5, 6.0))
 
-  months_list <- list(
-    list(year = 2026L, month = 4L, label = "April 2026"),
-    list(year = 2026L, month = 5L, label = "May 2026"),
-    list(year = 2026L, month = 6L, label = "June 2026"),
-    list(year = 2026L, month = 7L, label = "July 2026"))
+  months_list <- local({
+    y <- as.integer(format(SCHEDULE_START, "%Y"))
+    m <- as.integer(format(SCHEDULE_START, "%m"))
+    y_end <- as.integer(format(SCHEDULE_END, "%Y"))
+    m_end <- as.integer(format(SCHEDULE_END, "%m"))
+    out <- list()
+    repeat {
+      out <- c(out, list(list(year = y, month = m,
+        label = format(as.Date(sprintf("%d-%02d-01", y, m)), "%B %Y"))))
+      if (y == y_end && m == m_end) break
+      m <- m + 1L; if (m > 12L) { m <- 1L; y <- y + 1L }
+    }
+    out
+  })
   dow_lbl <- c("Sun","Mon","Tue","Wed","Thu","Fri","Sat")
 
   cal_row <- 4L
@@ -413,7 +433,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # Title
   mergeCells(wb, "Summary", cols = 1:SUM_COLS, rows = srow)
   writeData(wb, "Summary",
-    x = "SCHEDULE SUMMARY \u00B7 Apr 13 \u2013 Jul 19, 2026",
+    x = sprintf("SCHEDULE SUMMARY \u00B7 %s \u2013 %s",
+                format(SCHEDULE_START, "%b %d"),
+                format(SCHEDULE_END,   "%b %d, %Y")),
     startRow = srow, startCol = 1, colNames = FALSE)
   addStyle(wb, "Summary",
     mk(fg = C_NAVY, bold = TRUE, font_color = F_WHITE,
@@ -530,10 +552,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
          "After last night of streak: blocked D+1 and D+2; eligible again D+3"),
     list("Max Consecutive Nights",    "3"),
     list("Max Consecutive Work Days", "4"),
-    list("PP13 Capacity Note",
-         paste("John / Todd / Mandie / Maureen at conferences.",
-               "Only 6 active staff \u00D7 6 slots = 36 available vs 56 total \u2014",
-               "20 slots structurally empty.")),
     list("PTO Logic",
          "Vacation in a PP where available days < 6 counts as PTO (target-reducing)"))
 

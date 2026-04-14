@@ -48,6 +48,7 @@ server <- function(input, output, session) {
       PAY_PERIODS    <<- cfg$pay_periods
       HOLIDAYS       <<- cfg$holidays
       HOLIDAY_DATES  <<- as.Date(names(cfg$holidays))
+      HOLIDAY_NAMES  <<- cfg$holiday_names
     }
 
     withProgress(message = "Building schedule…", value = 0, {

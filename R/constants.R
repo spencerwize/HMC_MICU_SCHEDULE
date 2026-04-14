@@ -35,6 +35,11 @@ HOLIDAYS <- list(
 )
 HOLIDAY_DATES <- as.Date(names(HOLIDAYS))
 
+# Startup default — overwritten by server.R from SHEET_CONFIGS
+HOLIDAY_NAMES <- c("2026-05-25" = "Memorial Day",
+                   "2026-06-19" = "Juneteenth",
+                   "2026-07-04" = "July 4th")
+
 
 SLOTS     <- c("APP1", "APP2", "Roaming", "Night")
 DAY_SLOTS <- c("APP1", "APP2", "Roaming")

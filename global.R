@@ -59,6 +59,9 @@ SHEET_CONFIGS <- list(
       "2026-07-04" = list(APP1 = "Kristin", APP2 = "John",
                           Roaming = "Caroline", Night = "Mandie")
     ),
+    holiday_names = c("2026-05-25" = "Memorial Day",
+                      "2026-06-19" = "Juneteenth",
+                      "2026-07-04" = "July 4th"),
     cal_months = c("April 2026" = "2026-04", "May 2026"  = "2026-05",
                    "June 2026"  = "2026-06", "July 2026" = "2026-07")
   ),
@@ -75,6 +78,8 @@ SHEET_CONFIGS <- list(
     ),
     # Labor Day (Sep 7) and Columbus Day (Oct 12) — no pre-seeded staff yet
     holidays = list(),
+    holiday_names = c("2026-09-07" = "Labor Day",
+                      "2026-10-12" = "Columbus Day"),
     cal_months = c("July 2026"      = "2026-07", "August 2026"    = "2026-08",
                    "September 2026" = "2026-09", "October 2026"   = "2026-10")
   )
