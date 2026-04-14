@@ -76,6 +76,13 @@ server <- function(input, output, session) {
       validation <- validate_schedule(sched, time_off, targets)
 
       setProgress(1.0, detail = "Done.")
+
+      # Refresh the cal_person picker to match whoever is in the sheet
+      updatePickerInput(session, "cal_person",
+        choices  = STAFF,
+        selected = STAFF[1]
+      )
+
       list(
         sched      = sched,
         time_off   = time_off,

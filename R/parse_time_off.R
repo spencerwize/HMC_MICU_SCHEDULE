@@ -37,7 +37,6 @@ parse_time_off <- function(path, sheet = NULL) {
   empty_df <- function()
     data.frame(date = as.Date(character()), type = character(),
                stringsAsFactors = FALSE)
-  result <- setNames(lapply(STAFF, function(p) empty_df()), STAFF)
 
   raw <- read_timeoff_source(path, sheet)
 
@@ -51,7 +50,8 @@ parse_time_off <- function(path, sheet = NULL) {
     }
   }
 
-  if (is.null(raw) || nrow(raw) == 0) return(result)
+  if (is.null(raw) || nrow(raw) == 0)
+    return(setNames(lapply(STAFF, function(p) empty_df()), STAFF))
 
   # ── Locate Date column ────────────────────────────────────────────────────
   hdr      <- colnames(raw)
@@ -60,8 +60,22 @@ parse_time_off <- function(path, sheet = NULL) {
     date_col <- which(vapply(raw, looks_like_dates, logical(1L)))[1]
   if (length(date_col) == 0 || is.na(date_col)) {
     message("WARNING: no 'Date' column found in time-off source.")
-    return(result)
+    return(setNames(lapply(STAFF, function(p) empty_df()), STAFF))
   }
+
+  # ── Detect staff dynamically from column headers ──────────────────────────
+  # Every non-date, non-empty column is a staff member. This updates the
+  # global STAFF so the scheduler, validator, and UI all stay in sync with
+  # whoever is actually listed in the sheet — no code changes needed when
+  # people are added or removed.
+  detected <- trimws(hdr[-date_col])
+  detected <- detected[nzchar(detected)]
+  if (length(detected) > 0) {
+    STAFF <<- detected
+    message("Staff detected from sheet (", length(STAFF), "): ",
+            paste(STAFF, collapse = ", "))
+  }
+  result <- setNames(lapply(STAFF, function(p) empty_df()), STAFF)
 
   # ── Parse dates ────────────────────────────────────────────────────────────
   dates <- coerce_dates(raw[[date_col]])

@@ -2,6 +2,9 @@
 # constants.R  —  HMC MICU APP Schedule  Apr 13 – Jul 19, 2026
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Startup default — overwritten dynamically by parse_time_off() from the
+# sheet's column headers. Edit this only if you need a fallback when the
+# sheet is unavailable at app startup (e.g. for the cal_person picker).
 STAFF <- c("Katie", "John", "Hayden", "Todd", "Caroline",
            "Isabel", "Kristin", "Mandie", "Maureen", "Radha")
 
