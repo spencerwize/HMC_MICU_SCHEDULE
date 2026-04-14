@@ -127,11 +127,8 @@ ui <- page_navbar(
           options  = list(`live-search` = TRUE)
         ),
         selectInput("cal_month", "Month:",
-          choices = c("April 2026" = "2026-04",
-                      "May 2026"   = "2026-05",
-                      "June 2026"  = "2026-06",
-                      "July 2026"  = "2026-07"),
-          selected = "2026-04"
+          choices  = SHEET_CONFIGS[[TIMEOFF_SHEETS[1]]]$cal_months,
+          selected = SHEET_CONFIGS[[TIMEOFF_SHEETS[1]]]$cal_months[1]
         ),
         hr(),
         tags$small(class = "text-muted", "Color legend:"),
