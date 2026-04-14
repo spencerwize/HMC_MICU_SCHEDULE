@@ -19,8 +19,37 @@ server <- function(input, output, session) {
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
 
+  # ── Update UI controls when the sheet selection changes ────────────────────
+  # Keeps the calendar month picker and PP checkboxes in sync with the chosen
+  # date range without requiring the user to regenerate first.
+  observeEvent(input$sheet_select, {
+    cfg <- SHEET_CONFIGS[[input$sheet_select]]
+    if (!is.null(cfg)) {
+      updateSelectInput(session, "cal_month",
+        choices  = cfg$cal_months,
+        selected = cfg$cal_months[1]
+      )
+      updateCheckboxGroupInput(session, "grid_pp",
+        choices  = cfg$pay_periods$name,
+        selected = cfg$pay_periods$name
+      )
+    }
+  }, ignoreInit = TRUE)
+
   # ── Reactive pipeline ──────────────────────────────────────────────────────
   pipeline <- eventReactive(input$run_btn, {
+    # Apply sheet-specific constants before any pipeline step so that
+    # SCHEDULE_START / SCHEDULE_END / PAY_PERIODS / HOLIDAYS reflect the
+    # currently selected sheet rather than the April–July defaults.
+    cfg <- SHEET_CONFIGS[[input$sheet_select]]
+    if (!is.null(cfg)) {
+      SCHEDULE_START <<- cfg$schedule_start
+      SCHEDULE_END   <<- cfg$schedule_end
+      PAY_PERIODS    <<- cfg$pay_periods
+      HOLIDAYS       <<- cfg$holidays
+      HOLIDAY_DATES  <<- as.Date(names(cfg$holidays))
+    }
+
     withProgress(message = "Building schedule…", value = 0, {
       setProgress(0.1, detail = "Parsing time-off data…")
       selected_sheet <- if (nzchar(input$sheet_select)) input$sheet_select else NULL
@@ -56,6 +85,22 @@ server <- function(input, output, session) {
         grid       = sched$to_person_grid(time_off, targets)
       )
     })
+  })
+
+  # ── About text — reflects selected sheet's date range ─────────────────────
+  output$about_schedule_info <- renderUI({
+    cfg <- SHEET_CONFIGS[[input$sheet_select]]
+    if (is.null(cfg)) {
+      p("Select a sheet and click Generate Schedule.")
+    } else {
+      pp_names <- cfg$pay_periods$name
+      p(sprintf(
+        "This tool builds a 12-hour rotating shift schedule for 10 APP staff covering %s – %s (%s–%s).",
+        format(cfg$schedule_start, "%B %d, %Y"),
+        format(cfg$schedule_end,   "%B %d, %Y"),
+        pp_names[1], pp_names[length(pp_names)]
+      ))
+    }
   })
 
   # Flag for conditionalPanel

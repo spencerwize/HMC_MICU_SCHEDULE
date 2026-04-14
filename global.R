@@ -36,6 +36,50 @@ TIMEOFF_GSHEET_URL <- "https://docs.google.com/spreadsheets/d/1pjme5ne-O7XdM4aDf
 # it works immediately without API auth. Add/remove names to match the workbook.
 TIMEOFF_SHEETS <- c("April13-July19", "July20-Oct25")
 
+# Per-sheet schedule configurations.
+# Each entry maps a sheet tab name to the date range, pay periods, holiday
+# pre-seeds, and calendar month choices that apply to that period.
+SHEET_CONFIGS <- list(
+  "April13-July19" = list(
+    schedule_start = as.Date("2026-04-13"),
+    schedule_end   = as.Date("2026-07-19"),
+    pay_periods = data.frame(
+      name  = c("PP8","PP9","PP10","PP11","PP12","PP13","PP14"),
+      start = as.Date(c("2026-04-13","2026-04-27","2026-05-11",
+                        "2026-05-25","2026-06-08","2026-06-22","2026-07-06")),
+      end   = as.Date(c("2026-04-26","2026-05-10","2026-05-24",
+                        "2026-06-07","2026-06-21","2026-07-05","2026-07-19")),
+      stringsAsFactors = FALSE
+    ),
+    holidays = list(
+      "2026-05-25" = list(APP1 = "Hayden",  APP2 = "Todd",
+                          Roaming = "Radha", Night = "Isabel"),
+      "2026-06-19" = list(APP1 = "Mandie",  APP2 = "Caroline",
+                          Roaming = "Radha", Night = "Isabel"),
+      "2026-07-04" = list(APP1 = "Kristin", APP2 = "John",
+                          Roaming = "Caroline", Night = "Mandie")
+    ),
+    cal_months = c("April 2026" = "2026-04", "May 2026"  = "2026-05",
+                   "June 2026"  = "2026-06", "July 2026" = "2026-07")
+  ),
+  "July20-Oct25" = list(
+    schedule_start = as.Date("2026-07-20"),
+    schedule_end   = as.Date("2026-10-25"),
+    pay_periods = data.frame(
+      name  = c("PP15","PP16","PP17","PP18","PP19","PP20","PP21"),
+      start = as.Date(c("2026-07-20","2026-08-03","2026-08-17",
+                        "2026-08-31","2026-09-14","2026-09-28","2026-10-12")),
+      end   = as.Date(c("2026-08-02","2026-08-16","2026-08-30",
+                        "2026-09-13","2026-09-27","2026-10-11","2026-10-25")),
+      stringsAsFactors = FALSE
+    ),
+    # Labor Day (Sep 7) and Columbus Day (Oct 12) — no pre-seeded staff yet
+    holidays = list(),
+    cal_months = c("July 2026"      = "2026-07", "August 2026"    = "2026-08",
+                   "September 2026" = "2026-09", "October 2026"   = "2026-10")
+  )
+)
+
 # Legacy env-var fallback (used by run_schedule.R)
 TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
                                      unset = TIMEOFF_GSHEET_URL)

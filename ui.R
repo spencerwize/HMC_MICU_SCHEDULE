@@ -65,8 +65,7 @@ ui <- page_navbar(
       fluidRow(
         column(12,
           h4("About This App"),
-          p("This tool builds a 12-hour rotating shift schedule for 10 APP staff ",
-            "covering April 13 – July 19, 2026 (PP8–PP14)."),
+          uiOutput("about_schedule_info"),
           tags$ul(
             tags$li(strong("Day shift:"), " 6:30 AM – 6:30 PM  (APP1, APP2, Roaming APP)"),
             tags$li(strong("Night shift:"), " 6:30 PM – 6:30 AM  (1 slot)"),
