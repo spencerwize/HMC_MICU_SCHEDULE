@@ -34,7 +34,7 @@ TIMEOFF_GSHEET_URL <- "https://docs.google.com/spreadsheets/d/1pjme5ne-O7XdM4aDf
 
 # Known tab names in the Google Sheet — pre-populates the sheet dropdown so
 # it works immediately without API auth. Add/remove names to match the workbook.
-TIMEOFF_SHEETS <- c("Present")
+TIMEOFF_SHEETS <- c("April13-July19", "July20-Oct25")
 
 # Legacy env-var fallback (used by run_schedule.R)
 TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
