@@ -1,9 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # excel_output.R  —  Build 3-sheet Excel workbook matching reference format
 #
-# Sheet 1: Calendar   monthly Apr–Jul view (two rows/week: date + assignment)
+# Sheet 1: Calendar   monthly view (two rows/week: date + assignment)
 # Sheet 2: Summary    overview stats + PP-by-PP detail + staffing rules
-# Sheet 3: Schedule   two rows/day (day shift + night shift) + PP headers
+# Sheet 3: Schedule   one row/day (day + night merged) + PP sub-headers
 # ─────────────────────────────────────────────────────────────────────────────
 
 build_excel <- function(sched_obj, time_off, targets, output_path) {
@@ -137,14 +137,15 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
   # Calendar formula helpers — column range is derived from N_STAFF so that
   # adding/removing staff doesn't break the formulas.
-  # Schedule sheet: cols 1-8 are fixed headers; staff start at col 9 (I).
+  # Schedule sheet: cols 1-7 are fixed headers (Date/Day/PP/APP1/APP2/APP3/Night);
+  # staff columns start at col N_HDR+1 (col 8 = H for N_HDR=7).
   col_letter <- function(n) {
     if (n <= 26L) LETTERS[n]
     else paste0(LETTERS[(n - 1L) %/% 26L], LETTERS[(n - 1L) %% 26L + 1L])
   }
-  SCHED_STAFF_START <- 9L                        # column I
-  SCHED_STAFF_END   <- 8L + N_STAFF              # dynamic (R for 10, P for 8, etc.)
-  S_LTR  <- col_letter(SCHED_STAFF_START)        # "I"
+  SCHED_STAFF_START <- N_HDR + 1L               # col 8 = H (for N_HDR=7)
+  SCHED_STAFF_END   <- N_HDR + N_STAFF           # dynamic (Q for 10 staff, etc.)
+  S_LTR  <- col_letter(SCHED_STAFF_START)        # "H"
   E_LTR  <- col_letter(SCHED_STAFF_END)          # dynamic
 
   # Single row per day — formulas reference just one row in the Schedule sheet.
@@ -329,9 +330,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # Legend rows (matches reference rows 59-60)
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
-    x = paste0("APP1 / APP2 = day shift  \u00B7  Roam = roaming APP  ",
-               "\u00B7  Night = night shift  \u00B7  VAC = vacation  ",
-               "\u00B7  PTO = PTO used  \u00B7  CME = conference"),
+    x = paste0("APP1 / APP2 / APP 3 = day shift  \u00B7  Night = night shift  ",
+               "\u00B7  VAC = vacation  \u00B7  CME = conference  \u00B7  OFF = not scheduled"),
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
@@ -340,7 +340,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   cal_row <- cal_row + 1L
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
-    x = "OFF = not scheduled  \u00B7  Select staff member in cell C2 to change the view",
+    x = "Select staff member in cell C2 to change the view",
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
