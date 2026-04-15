@@ -30,11 +30,17 @@ Scheduler <- R6::R6Class("Scheduler",
     # PP shift counts (includes pre-seeded holidays + CME credited)
     pp_counts     = NULL,   # person -> named int vector (pp -> count)
 
+    # PTO grants made during scheduling (person -> Date vector)
+    # Each entry is a VAC day converted to a credited shift to relieve pressure
+    # before constraint-relaxing fallbacks are invoked.
+    granted_pto   = NULL,
+
     # ── Initialise ────────────────────────────────────────────────────────────
     initialize = function(time_off, targets) {
-      self$time_off <- time_off
-      self$targets  <- targets
-      self$dates    <- all_dates()
+      self$time_off    <- time_off
+      self$targets     <- targets
+      self$dates       <- all_dates()
+      self$granted_pto <- setNames(lapply(STAFF, function(p) as.Date(character())), STAFF)
 
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
                          Roaming = NA_character_, Night = NA_character_)
@@ -141,6 +147,54 @@ Scheduler <- R6::R6Class("Scheduler",
         v <- self$schedule[[ds]][[s]]
         !is.na(v) && v == person
       }))
+    },
+
+    # ── PTO grant helpers ─────────────────────────────────────────────────────
+
+    #' Convert n VAC days to credited PTO for person in pp_name.
+    #' Each converted day reduces sched_target by 1 (person needs one fewer
+    #' scheduled shift) and is logged in granted_pto for reporting.
+    #' Returns the number of days actually converted.
+    grant_pto = function(person, pp_name, n_days = 1L) {
+      pp_info  <- self$targets[[person]][[pp_name]]
+      n        <- min(as.integer(n_days), length(pp_info$vac_days))
+      if (n == 0L) return(invisible(0L))
+      for (i in seq_len(n)) {
+        d_pto <- self$targets[[person]][[pp_name]]$vac_days[1L]
+        old_t <- self$targets[[person]][[pp_name]]$sched_target
+        self$targets[[person]][[pp_name]]$credited    <- self$targets[[person]][[pp_name]]$credited    + 1L
+        self$targets[[person]][[pp_name]]$sched_target <- max(0L, old_t - 1L)
+        self$targets[[person]][[pp_name]]$vac_days     <- self$targets[[person]][[pp_name]]$vac_days[-1L]
+        self$granted_pto[[person]] <- sort(c(self$granted_pto[[person]], d_pto))
+        message(sprintf("  PTO grant: %-10s %s in %s  (sched_target %d \u2192 %d)",
+          person, format(d_pto, "%b %d"), pp_name, old_t,
+          self$targets[[person]][[pp_name]]$sched_target))
+      }
+      invisible(n)
+    },
+
+    #' Before violating any constraint, find the person in the PP of date d who
+    #' is the most pressured (highest urgency: shifts still needed / avail days)
+    #' and has at least one VAC day to convert.  Grant them 1 PTO day.
+    #' Returns TRUE if a grant was made (caller should retry eligibility).
+    try_pto_for_bottleneck = function(d) {
+      pp <- get_pp(d)
+      if (is.na(pp)) return(FALSE)
+      best_p    <- NULL
+      best_pres <- -Inf
+      for (person in STAFF) {
+        pp_info   <- self$targets[[person]][[pp]]
+        slots_left <- pp_info$sched_target - self$pp_counts[[person]][[pp]]
+        if (slots_left <= 0L)              next  # already at or over target
+        if (length(pp_info$vac_days) == 0L) next  # nothing to convert
+        remaining  <- pp_info$pp_dates[pp_info$pp_dates >= d]
+        avail_left <- sum(sapply(remaining, function(dd) !self$is_blocked(person, dd)))
+        pressure   <- slots_left / max(avail_left, 1L)
+        if (pressure > best_pres) { best_pres <- pressure; best_p <- person }
+      }
+      if (is.null(best_p)) return(FALSE)
+      self$grant_pto(best_p, pp)
+      TRUE
     },
 
     already_assigned = function(person, d) {
@@ -371,6 +425,12 @@ Scheduler <- R6::R6Class("Scheduler",
         # Force-fill fallback when no candidate passes hard constraints
         if (length(eligible) == 0L) {
           if (slot == "Night") {
+            # Before relaxing any constraint: try granting PTO to the most-pressed
+            # person in this PP.  If someone's urgency was inflating contention for
+            # constrained slots, relieving their target may open a clean assignment.
+            if (self$try_pto_for_bottleneck(d))
+              eligible <- self$eligible_for(d, slot)
+
             # Relax consecutive/recovery limits; still respect ≤ sched_target cap.
             # ABSOLUTE: never assign night D to someone with a pre-assigned day D+1
             # (would create a 24-hour night→day stretch), and never assign night D
@@ -521,6 +581,15 @@ Scheduler <- R6::R6Class("Scheduler",
               }
             }
           }
+
+          # If shifts still short after exhausting all clean days: grant PTO rather
+          # than leaving a silent shortfall or later forcing a constraint violation.
+          # Each PTO credit counts as a shift toward the target (sched_target - 1).
+          remaining_short <- self$targets[[person]][[pp_name]]$sched_target -
+                             self$pp_counts[[person]][[pp_name]]
+          n_vac <- length(self$targets[[person]][[pp_name]]$vac_days)
+          if (remaining_short > 0L && n_vac > 0L)
+            self$grant_pto(person, pp_name, min(remaining_short, n_vac))
         }
       }
     },
@@ -540,6 +609,14 @@ Scheduler <- R6::R6Class("Scheduler",
 
         # Fallback 1 (preferred): full hard-constraint check (cap baked into can_work_day)
         eligible <- STAFF[sapply(STAFF, function(p) self$can_work_day(p, d))]
+
+        # Before relaxing any constraint: try granting PTO to whoever is the
+        # most pressured person in this PP.  Their reduced urgency may unblock
+        # someone else for Fallback 1-level constraints on a re-check.
+        if (length(eligible) == 0L) {
+          if (!is.na(pp) && self$try_pto_for_bottleneck(d))
+            eligible <- STAFF[sapply(STAFF, function(p) self$can_work_day(p, d))]
+        }
 
         # Fallback 2: relax consecutive-day limit; keep night recovery + cap
         if (length(eligible) == 0L) {
