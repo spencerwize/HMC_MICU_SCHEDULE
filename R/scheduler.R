@@ -290,13 +290,14 @@ Scheduler <- R6::R6Class("Scheduler",
     # ── Scoring ───────────────────────────────────────────────────────────────
 
     #' Night score — lower is preferred, lexicographic on (priority, -pp_nights, total).
-    #' priority: 0 = streak continuation, 1 = recent block restart, 2 = fresh start,
-    #'           3 = had day shift yesterday (least preferred)
+    #' priority: 0 = streak continuation, 1 = fresh/new person,
+    #'           2 = recently ended a block, 3 = had day shift yesterday (least preferred)
     #'
     #' Clumping logic:
     #'   - Streak continuation (priority 0) strongly preferred — keeps blocks together.
-    #'   - Among fresh starts, people who recently finished a night block (within 5 days)
-    #'     get priority 1 so their blocks restart before a new person is drafted.
+    #'   - A completely fresh person (priority 1) is drafted before someone who
+    #'     recently ended a block (priority 2).  Rotating in new people is preferred
+    #'     over immediately restarting someone who just finished a streak.
     #'   - Within the same priority, more PP-nights already done → sorted first
     #'     (concentrates nights on fewer people per pay period).
     night_score = function(person, d) {
@@ -311,10 +312,10 @@ Scheduler <- R6::R6Class("Scheduler",
         any((d - 2L:5L) %in% nights) &&
         !is_cont
 
-      priority <- if (is_cont)      0L
+      priority <- if (is_cont)          0L
                   else if (had_day_prev) 3L
-                  else if (recent_block) 1L
-                  else                   2L
+                  else if (recent_block) 2L   # recently-ended block drafted AFTER fresh
+                  else                   1L   # fresh/new person drafted first
 
       # Count nights already assigned in this PP — used to concentrate nights
       pp <- get_pp(d)
@@ -327,52 +328,41 @@ Scheduler <- R6::R6Class("Scheduler",
     },
 
     #' Day score — higher is preferred.
+    #' Urgency is intentionally omitted: the goal is simply to fill all slots.
+    #' cleanup_pass handles any remaining quota gaps after the MRV pass.
     day_score = function(person, d, slot) {
-      pp      <- get_pp(d)
-      pp_info <- self$targets[[person]][[pp]]
+      shifts <- self$person_shifts[[person]]
 
-      # Urgency: use available remaining days in this PP (not raw calendar days).
-      # For people with a soft_min (e.g., Todd), urgency drops to zero once they
-      # reach their soft floor — others who still need shifts get priority first.
-      # They can still receive additional shifts up to sched_target; they just
-      # won't be actively sought out.
-      remaining   <- pp_info$pp_dates[pp_info$pp_dates >= d]
-      avail_left  <- sum(sapply(remaining, function(dd) !self$is_blocked(person, dd)))
-      slots_left  <- max(0L, pp_info$soft_min - self$pp_counts[[person]][[pp]])
-      urgency     <- slots_left / max(avail_left, 1L)
-
-      # Cluster: prefer working on days adjacent to already-worked days
-      worked      <- c(self$person_shifts[[person]]$date,
-                       self$person_nights[[person]])
-      prev_worked <- (d - 1L) %in% worked
-      next_worked <- (d + 1L) %in% worked
+      # Cluster: prefer days adjacent to other DAY shifts only.
+      # Night shifts form their own blocks via the night_score priority system;
+      # mixing them into the day-cluster signal would blur the separation.
+      day_dates   <- shifts$date
+      prev_worked <- (d - 1L) %in% day_dates
+      next_worked <- (d + 1L) %in% day_dates
       cluster     <- if (prev_worked && next_worked) 3L
                      else if (prev_worked) 2L
                      else if (next_worked) 1L
                      else -3L
 
       # Roaming balance
-      shifts      <- self$person_shifts[[person]]
-      n_total     <- nrow(shifts)
-      n_roam      <- if (n_total > 0) sum(shifts$slot == "Roaming") else 0L
-      roam_score  <- if (slot == "Roaming" && n_total > 0) -n_roam / n_total else 0
+      n_total    <- nrow(shifts)
+      n_roam     <- if (n_total > 0) sum(shifts$slot == "Roaming") else 0L
+      roam_score <- if (slot == "Roaming" && n_total > 0) -n_roam / n_total else 0
 
       # Weekend fairness
-      worked_d    <- shifts$date
-      n_wknd      <- if (length(worked_d) > 0) sum(is_weekend(worked_d)) else 0L
-      wknd_ratio  <- if (length(worked_d) > 0) n_wknd / length(worked_d) else 0
-      wknd_score  <- if (is_weekend(d)) -wknd_ratio else 0
+      n_wknd     <- if (n_total > 0) sum(is_weekend(shifts$date)) else 0L
+      wknd_ratio <- if (n_total > 0) n_wknd / n_total else 0
+      wknd_score <- if (is_weekend(d)) -wknd_ratio else 0
 
       # Day-before-night penalty: strongly discourage if this person has Night tomorrow
       tomorrow_night <- self$get_slot(d + 1L, "Night")
       dbn_penalty    <- if (!is.na(tomorrow_night) && tomorrow_night == person) -8 else 0
 
-      # Slot consistency: reward staying in the same role as yesterday so people
-      # aren't switching between APP1 / APP2 / APP3 every consecutive day
-      yest_shifts  <- shifts[shifts$date == d - 1L, ]
+      # Slot consistency: reward staying in the same role as yesterday
+      yest_shifts      <- shifts[shifts$date == d - 1L, ]
       slot_consistency <- if (nrow(yest_shifts) > 0 && yest_shifts$slot[1] == slot) 3 else 0
 
-      urgency * 10 + cluster + roam_score + wknd_score + dbn_penalty + slot_consistency
+      cluster + roam_score + wknd_score + dbn_penalty + slot_consistency
     },
 
     # ── Algorithm phases ──────────────────────────────────────────────────────
