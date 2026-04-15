@@ -231,6 +231,8 @@ Scheduler <- R6::R6Class("Scheduler",
 
     can_work_night = function(person, d) {
       if (self$is_blocked(person, d))                                 return(FALSE)
+      # Global night cap across the full schedule
+      if (length(self$person_nights[[person]]) >= MAX_NIGHTS_TOTAL)   return(FALSE)
       pp <- get_pp(d)
       if (!is.na(pp) &&
           self$pp_counts[[person]][[pp]] >=
@@ -426,6 +428,7 @@ Scheduler <- R6::R6Class("Scheduler",
             # (would create a 24-hour night→day stretch), and never assign night D
             # to someone who worked night D-1 and is still in recovery.
             under_cap <- function(p) {
+              if (length(self$person_nights[[p]]) >= MAX_NIGHTS_TOTAL) return(FALSE)
               pp2 <- get_pp(d)
               is.na(pp2) || self$pp_counts[[p]][[pp2]] <
                             self$targets[[p]][[pp2]]$sched_target

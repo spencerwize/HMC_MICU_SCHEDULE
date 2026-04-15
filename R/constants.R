@@ -44,6 +44,9 @@ HOLIDAY_NAMES <- c("2026-05-25" = "Memorial Day",
 SLOTS     <- c("APP1", "APP2", "Roaming", "Night")
 DAY_SLOTS <- c("APP1", "APP2", "Roaming")
 
+# Hard cap on total night shifts across the ENTIRE schedule (all PPs combined).
+MAX_NIGHTS_TOTAL <- 12L
+
 # Per-person soft minimum shifts per pay period.
 # People listed here are deprioritised once they reach their soft floor but can
 # still receive up to 6 shifts if slots are easy to fill.  Everyone else has
