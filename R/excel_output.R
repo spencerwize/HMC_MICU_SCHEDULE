@@ -60,41 +60,35 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     for (s in SLOTS) {
       v <- day_s[[s]]
       if (!is.na(v) && v == person)
-        return(if (s == "Night") "Night" else
-               if (s == "APP1") "APP1"  else
-               if (s == "APP2") "APP2"  else "Roam")
+        return(if (s == "Night")  "Night" else
+               if (s == "APP1")  "APP1"   else
+               if (s == "APP2")  "APP2"   else "APP 3")
     }
     pdata <- time_off[[person]]
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
     if (!is.na(typ)) {
-      pp_now  <- get_pp(d)
-      pp_info <- if (!is.na(pp_now)) targets[[person]][[pp_now]] else NULL
-      return(switch(typ,
-        cme = "CME",
-        off = "OFF",
-        vac = if (!is.null(pp_info) && pp_info$avail < 6L) "PTO" else "VAC",
-        ""))
+      return(switch(typ, cme = "CME", off = "OFF", vac = "VAC", ""))
     }
     ""
   }
 
   role_bg <- function(role, is_holiday = FALSE) {
-    if (is_holiday && role %in% c("APP1","APP2","Roam","Night"))
+    if (is_holiday && role %in% c("APP1","APP2","APP 3","Night"))
       return(C_YELLOW)
     switch(role,
-      APP1 = C_GREEN, APP2 = C_GREEN, Roam = C_GREEN,
+      APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      VAC  = C_PEACH,  PTO = "#FF9999",
+      VAC  = C_PEACH,
       CME  = C_ORANGE, OFF = C_PINK,
       NULL)
   }
 
   role_fc <- function(role) {
     switch(role,
-      APP1 = F_BLUE, APP2 = F_BLUE, Roam = F_BLUE,
+      APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      VAC = F_BROWN, PTO = F_RED,
+      VAC = F_BROWN,
       CME = F_WHITE, OFF = F_RED,
       "#000000")
   }
@@ -136,7 +130,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       pp <- get_pp(d)
       if (!is.na(pp) && pp != prev) { cr <- cr + 1L; prev <- pp }
       rm[[as.character(d)]] <- cr
-      cr <- cr + 2L
+      cr <- cr + 1L   # one row per day (day + night merged)
     }
     rm
   })
@@ -153,24 +147,18 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   S_LTR  <- col_letter(SCHED_STAFF_START)        # "I"
   E_LTR  <- col_letter(SCHED_STAFF_END)          # dynamic
 
-  cal_role_formula <- function(dr, nr) {
-    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, dr, E_LTR, dr)
-    N <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, nr, E_LTR, nr)
+  # Single row per day — formulas reference just one row in the Schedule sheet.
+  cal_role_formula <- function(row) {
+    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, row, E_LTR, row)
     M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
-    sprintf(
-      paste0('IF(IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),',
-             'INDEX(%s,1,%s)),"")=0,"",IFERROR(IF(INDEX(%s,1,%s)<>"",',
-             'INDEX(%s,1,%s),INDEX(%s,1,%s)),""))'),
-      D,M,D,M,N,M, D,M,D,M,N,M)
+    sprintf('IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),""),"")', D,M,D,M)
   }
 
-  cal_hol_formula <- function(dr, nr, hol_name) {
-    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, dr, E_LTR, dr)
-    N <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, nr, E_LTR, nr)
+  cal_hol_formula <- function(row, hol_name) {
+    D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, row, E_LTR, row)
     M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
-    sprintf(
-      '"%s  "&IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),INDEX(%s,1,%s)),"")',
-      hol_name, D,M,D,M,N,M)
+    sprintf('"%s  "&IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),""),"")',
+      hol_name, D,M,D,M)
   }
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -310,13 +298,12 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
           # Role cell — Excel formula (dynamic, responds to C2 dropdown)
           ds  <- as.character(cur)
-          dr  <- sched_row_map[[ds]]
-          nr  <- dr + 1L
-          fml <- if (is_hol) {
-            hn <- HOLIDAY_NAMES[format(cur, "%Y-%m-%d")]
-            cal_hol_formula(dr, nr, hn)
+          row <- sched_row_map[[ds]]
+          hn  <- HOLIDAY_NAMES[format(cur, "%Y-%m-%d")]
+          fml <- if (is_hol && !is.na(hn)) {
+            cal_hol_formula(row, hn)
           } else {
-            cal_role_formula(dr, nr)
+            cal_role_formula(row)
           }
           writeFormula(wb, "Calendar", x = fml,
             startRow = role_row, startCol = col)
@@ -453,10 +440,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Credited Days (CME/Conf)", "n_cred",   "#FFFFFF",  TRUE),
     list("Total incl. Credited",     "n_total",  C_GRAY_LT, FALSE),
     list("Night Shifts",             "n_night",  "#FFFFFF",  FALSE),
-    list("Roaming APP Shifts",       "n_roam",   C_GRAY_LT, FALSE),
+    list("APP 3 Shifts",             "n_roam",   C_GRAY_LT, FALSE),
     list("Weekend Shifts",           "n_wknd",   "#FFFFFF",  FALSE),
     list("Vacation Days",            "n_vac",    C_PEACH,    FALSE),
-    list("PTO Days",                 "n_pto",    "#FFFFFF",  FALSE),
     list("Shortfall (shift-days)",   "n_bump",   "#FFFFFF",  FALSE))
 
   for (ov in ovr_rows) {
@@ -584,12 +570,13 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # ════════════════════════════════════════════════════════════════════════════
   addWorksheet(wb, "Schedule")
 
-  # Col layout: Date | Day | PP | Shift | APP1 | APP2 | Roaming | Night | [staff...] | _key_
-  N_HDR  <- 8L
+  # Col layout: Date | Day | PP | APP1 | APP2 | APP3 | Night | [staff...] | _key_
+  # Day and night are merged into one row per calendar day.
+  N_HDR  <- 7L
   N_COLS <- N_HDR + N_STAFF + 1L
 
-  hdr <- c("Date","Day","PP","Shift",
-           "APP 1","APP 2","Roaming APP","Night Shift",
+  hdr <- c("Date","Day","PP",
+           "APP 1","APP 2","APP 3","Night Shift",
            STAFF, "_key_")
   writeData(wb, "Schedule", x = as.data.frame(t(hdr)),
     startRow = 1, startCol = 1, colNames = FALSE)
@@ -641,8 +628,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
              border = "All", border_color = "#BBBBBB"),
           rows = schr, cols = N_HDR + ci)
       }
-      # Fill structural and key cols of PP header
-      for (col_fill in c(5:N_HDR, N_COLS)) {
+      # Fill slot cols and key col of PP header
+      for (col_fill in c(4:N_HDR, N_COLS)) {
         addStyle(wb, "Schedule",
           mk(fg = C_BLUE_LT, border = "All", border_color = "#BBBBBB"),
           rows = schr, cols = col_fill)
@@ -660,134 +647,78 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     roam  <- ifelse(is.na(day$Roaming), "", day$Roaming)
     night <- ifelse(is.na(day$Night),   "", day$Night)
 
-    bg_day   <- if (is_h) C_YELLOW else if (is_w) C_LAVENDER else "#FFFFFF"
-    bg_night <- C_NIGHT
+    bg_day <- if (is_h) C_YELLOW else if (is_w) C_LAVENDER else "#FFFFFF"
 
-    # ── Day-shift row ────────────────────────────────────────────────────────
+    # ── Single combined row (day + night) ────────────────────────────────────
     dr <- schr
     writeData(wb, "Schedule",
       x = data.frame(Date = date_str, Day = day_lbl, PP = pp_lbl,
-                     Shift = "6:30AM\u20136:30PM",
-                     APP1 = app1, APP2 = app2, Roaming = roam, Night = "",
+                     APP1 = app1, APP2 = app2, APP3 = roam, Night = night,
                      stringsAsFactors = FALSE),
       startRow = dr, startCol = 1, colNames = FALSE)
     writeData(wb, "Schedule",
-      x = sprintf("%s|6:30AM-6:30PM", date_str),
-      startRow = dr, startCol = N_COLS, colNames = FALSE)
+      x = date_str, startRow = dr, startCol = N_COLS, colNames = FALSE)
 
     # Date / Day / PP cols
     addStyle(wb, "Schedule",
       mk(fg = bg_day, bold = TRUE, font_color = F_NAVY, halign = "left",
          border = "All", border_color = "#DDDDDD", size = 9),
       rows = dr, cols = 1:3)
-    # Shift label
-    addStyle(wb, "Schedule",
-      mk(fg = bg_day, font_color = F_GRAY, halign = "left",
-         border = "All", border_color = "#DDDDDD", size = 9),
-      rows = dr, cols = 4)
-    # APP1 / APP2 / Roaming
+
+    # APP1 / APP2 / APP3 slot cols (4-6)
+    day_vals <- c(app1, app2, roam)
     for (j in 1:3) {
-      val <- c(app1, app2, roam)[j]
+      val <- day_vals[j]
       cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else bg_day
       cfc <- if (nchar(val) > 0) F_BLUE else F_GRAY
       addStyle(wb, "Schedule",
         mk(fg = cbg, bold = nchar(val) > 0, font_color = cfc,
            border = "All", border_color = "#DDDDDD", size = 9),
-        rows = dr, cols = 4L + j)
+        rows = dr, cols = 3L + j)
     }
-    # Night col (empty in day row)
+
+    # Night slot col (7)
+    cbg_n <- if (nchar(night) > 0) (if (is_h) C_YELLOW else C_NIGHT) else bg_day
     addStyle(wb, "Schedule",
-      mk(fg = bg_day, border = "All", border_color = "#DDDDDD", size = 9),
+      mk(fg = cbg_n, bold = nchar(night) > 0,
+         font_color = if (nchar(night) > 0) F_NAVY else F_GRAY,
+         border = "All", border_color = "#DDDDDD", size = 9),
       rows = dr, cols = N_HDR)
 
-    # Per-staff cols
+    # Per-staff cols — show full role (day, night, or time-off) in one cell
     for (ci in seq_along(STAFF)) {
       person <- STAFF[ci]
       col    <- N_HDR + ci
       role   <- role_lookup[[ds]][[person]]
       if (is.na(role)) role <- ""
-      show   <- if (role == "Night") "" else role  # night shown in night row
-      cbg    <- { rb <- role_bg(show, is_h); if (is.null(rb)) bg_day else rb }
-      cfc    <- if (nchar(show) > 0) role_fc(show) else F_GRAY
-      bdr_c  <- "#DDDDDD"
-      bdr_s  <- "thin"
-      if (nchar(show) > 0 && is_dbn(d, person)) {
+      is_night_role <- role == "Night"
+      cbg <- {
+        rb <- role_bg(role, is_h)
+        if (is.null(rb)) (if (is_night_role) C_NIGHT else bg_day) else rb
+      }
+      cfc   <- if (nchar(role) > 0) role_fc(role) else F_GRAY
+      bdr_c <- "#DDDDDD"; bdr_s <- "thin"
+      if (role %in% c("APP1","APP2","APP 3") && is_dbn(d, person)) {
         bdr_c <- C_ORANGE; bdr_s <- "dashed"
       }
-      writeData(wb, "Schedule", x = show,
+      writeData(wb, "Schedule", x = role,
         startRow = dr, startCol = col, colNames = FALSE)
       addStyle(wb, "Schedule",
-        mk(fg = cbg, bold = nchar(show) > 0, font_color = cfc,
+        mk(fg = cbg, bold = nchar(role) > 0, font_color = cfc,
            border = "All", border_color = bdr_c, border_style = bdr_s, size = 9),
         rows = dr, cols = col)
     }
     addStyle(wb, "Schedule",
       mk(fg = "#F7F7F7", font_color = F_LGRAY, size = 7, halign = "left"),
       rows = dr, cols = N_COLS)
-    setRowHeights(wb, "Schedule", rows = dr, heights = 15)
+    setRowHeights(wb, "Schedule", rows = dr, heights = 18)
 
-    # ── Night-shift row ──────────────────────────────────────────────────────
-    nr <- schr + 1L
-    writeData(wb, "Schedule",
-      x = data.frame(Date = date_str, Day = "", PP = "",
-                     Shift = "6:30PM\u20136:30AM",
-                     APP1 = "", APP2 = "", Roaming = "", Night = night,
-                     stringsAsFactors = FALSE),
-      startRow = nr, startCol = 1, colNames = FALSE)
-    writeData(wb, "Schedule",
-      x = sprintf("%s|6:30PM-6:30AM", date_str),
-      startRow = nr, startCol = N_COLS, colNames = FALSE)
-
-    addStyle(wb, "Schedule",
-      mk(fg = bg_night, bold = TRUE, font_color = F_NAVY, halign = "left",
-         border = "All", border_color = "#BBBBBB", size = 9),
-      rows = nr, cols = 1:3)
-    addStyle(wb, "Schedule",
-      mk(fg = bg_night, font_color = F_GRAY, halign = "left",
-         border = "All", border_color = "#BBBBBB", size = 9),
-      rows = nr, cols = 4)
-    addStyle(wb, "Schedule",
-      mk(fg = bg_night, border = "All", border_color = "#BBBBBB", size = 9),
-      rows = nr, cols = 5:7)
-    # Night cell
-    cbg_n <- if (nchar(night) > 0) (if (is_h) C_YELLOW else C_NIGHT) else bg_night
-    addStyle(wb, "Schedule",
-      mk(fg = cbg_n, bold = nchar(night) > 0,
-         font_color = if (nchar(night) > 0) F_NAVY else F_GRAY,
-         border = "All", border_color = "#BBBBBB", size = 9),
-      rows = nr, cols = N_HDR)
-
-    # Per-staff cols (night row: show "Night" only for the night person)
-    for (ci in seq_along(STAFF)) {
-      person <- STAFF[ci]
-      col    <- N_HDR + ci
-      show   <- if (!is.na(day$Night) && day$Night == person) "Night" else ""
-      # Also show off/vac/cme status in night row if not the night worker
-      if (nchar(show) == 0L) {
-        role <- role_lookup[[ds]][[person]]
-        if (is.na(role)) role <- ""
-        if (role %in% c("OFF","VAC","PTO","CME")) show <- role
-      }
-      cbg <- { rb <- role_bg(show); if (is.null(rb)) bg_night else rb }
-      cfc <- if (nchar(show) > 0) role_fc(show) else F_GRAY
-      writeData(wb, "Schedule", x = show,
-        startRow = nr, startCol = col, colNames = FALSE)
-      addStyle(wb, "Schedule",
-        mk(fg = cbg, bold = nchar(show) > 0, font_color = cfc,
-           border = "All", border_color = "#BBBBBB", size = 9),
-        rows = nr, cols = col)
-    }
-    addStyle(wb, "Schedule",
-      mk(fg = C_NIGHT, font_color = F_LGRAY, size = 7, halign = "left"),
-      rows = nr, cols = N_COLS)
-    setRowHeights(wb, "Schedule", rows = nr, heights = 15)
-
-    schr <- schr + 2L
+    schr <- schr + 1L
   }
 
   setColWidths(wb, "Schedule",
     cols   = seq_len(N_COLS),
-    widths = c(11, 5, 5, 17, 13, 9, 13, 13, rep(9, N_STAFF), 18))
+    widths = c(11, 5, 5, 13, 9, 13, 13, rep(9, N_STAFF), 18))
 
   # ── Save ───────────────────────────────────────────────────────────────────
   saveWorkbook(wb, output_path, overwrite = TRUE)

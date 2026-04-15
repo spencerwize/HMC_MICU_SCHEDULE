@@ -133,11 +133,10 @@ ui <- page_navbar(
         hr(),
         tags$small(class = "text-muted", "Color legend:"),
         tags$div(class = "mt-2",
-          legend_chip("#92D050", "Day (APP1/APP2/Roam)"),
+          legend_chip("#92D050", "Day (APP1/APP2/APP3)"),
           legend_chip("#BDD7EE", "Night"),
           legend_chip("#FFFF99", "Holiday"),
-          legend_chip("#FFD966", "Vacation"),
-          legend_chip("#FF99CC", "PTO"),
+          legend_chip("#FFD966", "VAC"),
           legend_chip("#FF6D01", "CME / Conference"),
           legend_chip("#FFC7CE", "Off"),
           legend_chip("#F2F2F2", "Weekend (no shift)")

@@ -76,10 +76,20 @@ SHEET_CONFIGS <- list(
                         "2026-09-13","2026-09-27","2026-10-11","2026-10-25")),
       stringsAsFactors = FALSE
     ),
-    # Labor Day (Sep 7) and Columbus Day (Oct 12) — no pre-seeded staff yet
-    holidays = list(),
-    holiday_names = c("2026-09-07" = "Labor Day",
-                      "2026-10-12" = "Columbus Day"),
+    # Pre-seed Labor Day (Sep 7) and the weekend prior (Sep 5-6) with the
+    # same crew so they can all go out of town if they want.
+    # holiday_dates controls which dates get the yellow holiday highlight —
+    # only Labor Day itself, not the regular weekend days.
+    holidays = list(
+      "2026-09-05" = list(APP1 = "Katie",   APP2 = "Maureen",
+                          Roaming = "Kristin", Night = "Hayden"),
+      "2026-09-06" = list(APP1 = "Katie",   APP2 = "Maureen",
+                          Roaming = "Kristin", Night = "Hayden"),
+      "2026-09-07" = list(APP1 = "Katie",   APP2 = "Maureen",
+                          Roaming = "Kristin", Night = "Hayden")
+    ),
+    holiday_dates = as.Date("2026-09-07"),   # only Labor Day colored yellow
+    holiday_names = c("2026-09-07" = "Labor Day"),
     cal_months = c("July 2026"      = "2026-07", "August 2026"    = "2026-08",
                    "September 2026" = "2026-09", "October 2026"   = "2026-10")
   )

@@ -47,7 +47,10 @@ server <- function(input, output, session) {
       SCHEDULE_END   <<- cfg$schedule_end
       PAY_PERIODS    <<- cfg$pay_periods
       HOLIDAYS       <<- cfg$holidays
-      HOLIDAY_DATES  <<- as.Date(names(cfg$holidays))
+      # holiday_dates may be explicitly narrower than names(HOLIDAYS) when
+      # some entries are pre-seeded weekend shifts that shouldn't be highlighted
+      HOLIDAY_DATES  <<- if (!is.null(cfg$holiday_dates)) cfg$holiday_dates
+                         else as.Date(names(cfg$holidays))
       HOLIDAY_NAMES  <<- cfg$holiday_names
     }
 
@@ -218,7 +221,7 @@ server <- function(input, output, session) {
           if (!is.na(v) && v == person) {
             role <- if (s == "Night") "Night" else
                     if (s == "APP1")  "APP1"  else
-                    if (s == "APP2")  "APP2"  else "Roam"
+                    if (s == "APP2")  "APP2"  else "APP 3"
             break
           }
         }
@@ -232,8 +235,7 @@ server <- function(input, output, session) {
             role <- switch(typ,
               cme = "CME",
               off = "OFF",
-              vac = if (!is.null(pp_info) && !is.na(pp_now) &&
-                        pp_info$avail < 6L) "PTO" else "VAC",
+              vac = "VAC",
               ""
             )
           }
@@ -241,14 +243,13 @@ server <- function(input, output, session) {
 
         is_hol <- cur %in% HOLIDAY_DATES
         bg <- switch(role,
-          APP1  = if (is_hol) "#FFFF99" else "#92D050",
-          APP2  = if (is_hol) "#FFFF99" else "#92D050",
-          Roam  = if (is_hol) "#FFFF99" else "#92D050",
-          Night = if (is_hol) "#FFFF99" else "#BDD7EE",
-          VAC   = "#FFD966",
-          PTO   = "#FF99CC",
-          CME   = "#FF6D01",
-          OFF   = "#FFC7CE",
+          APP1    = if (is_hol) "#FFFF99" else "#92D050",
+          APP2    = if (is_hol) "#FFFF99" else "#92D050",
+          "APP 3" = if (is_hol) "#FFFF99" else "#92D050",
+          Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
+          VAC     = "#FFD966",
+          CME     = "#FF6D01",
+          OFF     = "#FFC7CE",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
         )
         color <- if (role == "CME") "#FFFFFF" else "#000000"
@@ -314,10 +315,10 @@ server <- function(input, output, session) {
 
     # Pivot wide: date x person
     role_colors <- c(
-      APP1  = "#92D050", APP2 = "#92D050", Roam = "#92D050",
-      Night = "#BDD7EE",
-      VAC   = "#FFD966", PTO  = "#FF99CC", CME  = "#FF6D01",
-      OFF   = "#FFC7CE"
+      APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
+      Night   = "#BDD7EE",
+      VAC     = "#FFD966", CME  = "#FF6D01",
+      OFF     = "#FFC7CE"
     )
 
     wide <- grid %>%

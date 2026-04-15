@@ -222,18 +222,41 @@ Scheduler <- R6::R6Class("Scheduler",
 
     # ── Scoring ───────────────────────────────────────────────────────────────
 
-    #' Night score — lower is preferred.
-    #' Returns named list(priority, total) for lexicographic sort.
-    #' priority: 0 = streak continuation, 1 = fresh start, 2 = had day shift yesterday
+    #' Night score — lower is preferred, lexicographic on (priority, -pp_nights, total).
+    #' priority: 0 = streak continuation, 1 = recent block restart, 2 = fresh start,
+    #'           3 = had day shift yesterday (least preferred)
+    #'
+    #' Clumping logic:
+    #'   - Streak continuation (priority 0) strongly preferred — keeps blocks together.
+    #'   - Among fresh starts, people who recently finished a night block (within 5 days)
+    #'     get priority 1 so their blocks restart before a new person is drafted.
+    #'   - Within the same priority, more PP-nights already done → sorted first
+    #'     (concentrates nights on fewer people per pay period).
     night_score = function(person, d) {
-      nights    <- self$person_nights[[person]]
-      is_cont   <- (d - 1L) %in% nights
-      # Penalise day-before-night: if person already has a day shift on d-1
+      nights       <- self$person_nights[[person]]
+      is_cont      <- (d - 1L) %in% nights
       had_day_prev <- any(sapply(DAY_SLOTS, function(s) {
         v <- self$get_slot(d - 1L, s); !is.na(v) && v == person
       }))
-      priority <- if (is_cont) 0L else if (had_day_prev) 2L else 1L
-      list(priority = priority, total = length(nights))
+      # "recent_block": ended a night streak within the past 5 days (not counting
+      # d-1 since that's already the is_cont case)
+      recent_block <- length(nights) > 0L &&
+        any((d - 2L:5L) %in% nights) &&
+        !is_cont
+
+      priority <- if (is_cont)      0L
+                  else if (had_day_prev) 3L
+                  else if (recent_block) 1L
+                  else                   2L
+
+      # Count nights already assigned in this PP — used to concentrate nights
+      pp <- get_pp(d)
+      pp_nights <- if (!is.na(pp) && !is.null(self$targets[[person]][[pp]])) {
+        pp_d <- self$targets[[person]][[pp]]$pp_dates
+        sum(nights %in% pp_d)
+      } else 0L
+
+      list(priority = priority, pp_nights = pp_nights, total = length(nights))
     },
 
     #' Day score — higher is preferred.
@@ -273,7 +296,12 @@ Scheduler <- R6::R6Class("Scheduler",
       tomorrow_night <- self$get_slot(d + 1L, "Night")
       dbn_penalty    <- if (!is.na(tomorrow_night) && tomorrow_night == person) -8 else 0
 
-      urgency * 10 + cluster + roam_score + wknd_score + dbn_penalty
+      # Slot consistency: reward staying in the same role as yesterday so people
+      # aren't switching between APP1 / APP2 / APP3 every consecutive day
+      yest_shifts  <- shifts[shifts$date == d - 1L, ]
+      slot_consistency <- if (nrow(yest_shifts) > 0 && yest_shifts$slot[1] == slot) 3 else 0
+
+      urgency * 10 + cluster + roam_score + wknd_score + dbn_penalty + slot_consistency
     },
 
     # ── Algorithm phases ──────────────────────────────────────────────────────
@@ -358,6 +386,7 @@ Scheduler <- R6::R6Class("Scheduler",
         if (slot == "Night") {
           sc  <- lapply(pool, function(p) self$night_score(p, d))
           ord <- order(sapply(sc, `[[`, "priority"),
+                       -sapply(sc, `[[`, "pp_nights"),   # more PP nights → sorted first
                        sapply(sc, `[[`, "total"))
         } else {
           sc  <- sapply(pool, function(p) self$day_score(p, d, slot))
@@ -577,25 +606,20 @@ Scheduler <- R6::R6Class("Scheduler",
           for (s in SLOTS) {
             v <- day_s[[s]]
             if (!is.na(v) && v == person) {
-              role <- if (s == "Night") "Night" else
-                      if (s == "APP1")  "APP1"  else
-                      if (s == "APP2")  "APP2"  else "Roam"
+              role <- if (s == "Night")   "Night" else
+                      if (s == "APP1")    "APP1"  else
+                      if (s == "APP2")    "APP2"  else "APP 3"
               break
             }
           }
-          # If not working, check time-off type
+          # If not working, check time-off type (VAC covers both vac and pto)
           if (is.na(role)) {
             pdata <- time_off[[person]]
             m     <- pdata[pdata$date == d, ]
             typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
             if (!is.na(typ)) {
               role <- if (typ == "cme") "CME" else
-                      if (typ == "off") "OFF" else {
-                        # vac: charge PTO if avail < 6 in this PP
-                        pp_info <- targets[[person]][[pp]]
-                        if (!is.null(pp_info) && !is.na(pp) && pp_info$avail < 6L)
-                          "PTO" else "VAC"
-                      }
+                      if (typ == "off") "OFF" else "VAC"
             }
           }
           is_hol <- d %in% HOLIDAY_DATES
