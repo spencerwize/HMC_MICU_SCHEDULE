@@ -4,12 +4,13 @@
 # Hard constraints enforced:
 #   1. APP1 always filled (last resort: may be left empty if all at shift cap)
 #   2. Every night staffed (last resort: may be left empty if all at shift cap)
-#   3. No day-shift morning after night (d+1 after night d)
+#   3. ABSOLUTE: no day shift the morning after a night shift (night D → day D+1 = 24 h)
 #   4. Night recovery: blocked d+1 and d+2 after LAST night of streak (d+3 eligible)
 #   5. Max 3 consecutive nights
 #   6. Max 4 consecutive working days
 #   7. No day-to-night same calendar day
 #   8. Hard shift cap: no one scheduled beyond sched_target (≤ 6 clinical shifts/PP)
+#   NOTE: Constraint 3 is enforced in EVERY fallback path — it can never be relaxed.
 # ─────────────────────────────────────────────────────────────────────────────
 
 Scheduler <- R6::R6Class("Scheduler",
@@ -128,6 +129,18 @@ Scheduler <- R6::R6Class("Scheduler",
 
     had_night_on = function(person, d) {
       d %in% self$person_nights[[person]]
+    },
+
+    # TRUE if person is already assigned to ANY day slot on date d.
+    # Used to enforce the absolute ban on scheduling a day shift immediately
+    # after a night shift (night D → day D+1 would be a 24-hour stretch).
+    has_day_on = function(person, d) {
+      ds <- as.character(d)
+      if (is.null(self$schedule[[ds]])) return(FALSE)
+      any(sapply(DAY_SLOTS, function(s) {
+        v <- self$schedule[[ds]][[s]]
+        !is.na(v) && v == person
+      }))
     },
 
     already_assigned = function(person, d) {
@@ -264,10 +277,14 @@ Scheduler <- R6::R6Class("Scheduler",
       pp      <- get_pp(d)
       pp_info <- self$targets[[person]][[pp]]
 
-      # Urgency: use available remaining days in this PP (not raw calendar days)
+      # Urgency: use available remaining days in this PP (not raw calendar days).
+      # For people with a soft_min (e.g., Todd), urgency drops to zero once they
+      # reach their soft floor — others who still need shifts get priority first.
+      # They can still receive additional shifts up to sched_target; they just
+      # won't be actively sought out.
       remaining   <- pp_info$pp_dates[pp_info$pp_dates >= d]
       avail_left  <- sum(sapply(remaining, function(dd) !self$is_blocked(person, dd)))
-      slots_left  <- max(0L, pp_info$sched_target - self$pp_counts[[person]][[pp]])
+      slots_left  <- max(0L, pp_info$soft_min - self$pp_counts[[person]][[pp]])
       urgency     <- slots_left / max(avail_left, 1L)
 
       # Cluster: prefer working on days adjacent to already-worked days
@@ -354,18 +371,25 @@ Scheduler <- R6::R6Class("Scheduler",
         # Force-fill fallback when no candidate passes hard constraints
         if (length(eligible) == 0L) {
           if (slot == "Night") {
-            # Relax consecutive/recovery limits; still respect ≤ sched_target cap
+            # Relax consecutive/recovery limits; still respect ≤ sched_target cap.
+            # ABSOLUTE: never assign night D to someone with a pre-assigned day D+1
+            # (would create a 24-hour night→day stretch), and never assign night D
+            # to someone who worked night D-1 and is still in recovery.
             under_cap <- function(p) {
               pp2 <- get_pp(d)
               is.na(pp2) || self$pp_counts[[p]][[pp2]] <
                             self$targets[[p]][[pp2]]$sched_target
             }
+            no_nbd <- function(p)           # night-before-day guard (forward)
+              !self$has_day_on(p, d + 1L)
             eligible <- STAFF[sapply(STAFF, function(p)
               under_cap(p) && !self$is_blocked(p, d) &&
-              !self$had_night_on(p, d - 1L) && !self$already_assigned(p, d))]
+              !self$had_night_on(p, d - 1L) && no_nbd(p) &&
+              !self$already_assigned(p, d))]
             if (length(eligible) == 0L)
               eligible <- STAFF[sapply(STAFF, function(p)
-                under_cap(p) && !self$already_assigned(p, d))]
+                under_cap(p) && !self$had_night_on(p, d - 1L) &&
+                no_nbd(p) && !self$already_assigned(p, d))]
             # 2nd last-ditch: truly no one under cap → leave Night unstaffed
             if (length(eligible) == 0L) next
           } else {
@@ -376,10 +400,15 @@ Scheduler <- R6::R6Class("Scheduler",
           }
         }
 
-        # Prefer under-target in this PP
+        # Prefer under-soft-floor in this PP.
+        # Using soft_min (not sched_target) means someone like Todd who is at his
+        # soft floor (4) is treated as "satisfied" — others still below their own
+        # floor get picked first.  If nobody is below their floor, the full
+        # eligible pool is used and the scorer decides (Todd can still get a 5th
+        # or 6th shift, just isn't actively prioritised for one).
         under <- eligible[sapply(eligible, function(p)
           !is.na(pp) &&
-          self$pp_counts[[p]][[pp]] < self$targets[[p]][[pp]]$sched_target)]
+          self$pp_counts[[p]][[pp]] < self$targets[[p]][[pp]]$soft_min)]
         pool <- if (length(under) > 0L) under else eligible
 
         # Score and build ordered pool
@@ -523,26 +552,32 @@ Scheduler <- R6::R6Class("Scheduler",
           })]
         }
 
-        # Fallback 3: relax night-recovery; keep cap + no double-booking
+        # Fallback 3: relax night-recovery window; keep cap + no double-booking.
+        # ABSOLUTE: still block anyone who worked night D-1 (night→day = 24 h).
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
             under_cap(p) &&
+            !self$had_night_on(p, d - 1L) &&   # HARD: no night-then-day
             !self$is_blocked(p, d) &&
             !self$already_assigned(p, d) &&
             (is.na(night_p) || night_p != p))]
         }
 
-        # Fallback 4: relax all clinical constraints; keep cap + no double-booking
+        # Fallback 4: relax all clinical constraints; keep cap + no double-booking.
+        # ABSOLUTE: still block night-then-day.
         if (length(eligible) == 0L) {
           eligible <- STAFF[sapply(STAFF, function(p)
             under_cap(p) &&
+            !self$had_night_on(p, d - 1L) &&   # HARD: no night-then-day
             !self$already_assigned(p, d) &&
             (is.na(night_p) || night_p != p))]
         }
 
-        # Fallback 5: relax double-booking check; still under cap
+        # Fallback 5: relax double-booking; still under cap.
+        # ABSOLUTE: still block night-then-day even as last resort.
         if (length(eligible) == 0L) {
-          eligible <- STAFF[sapply(STAFF, function(p) under_cap(p))]
+          eligible <- STAFF[sapply(STAFF, function(p)
+            under_cap(p) && !self$had_night_on(p, d - 1L))]  # HARD: no night-then-day
         }
 
         # 1st last-ditch: no one under cap → leave APP1 empty (understaffed day)

@@ -44,6 +44,14 @@ HOLIDAY_NAMES <- c("2026-05-25" = "Memorial Day",
 SLOTS     <- c("APP1", "APP2", "Roaming", "Night")
 DAY_SLOTS <- c("APP1", "APP2", "Roaming")
 
+# Per-person soft minimum shifts per pay period.
+# People listed here are deprioritised once they reach their soft floor but can
+# still receive up to 6 shifts if slots are easy to fill.  Everyone else has
+# soft_min == sched_target (i.e., the scheduler treats their target as firm).
+FLEX_TARGETS <- list(
+  Todd = 4L
+)
+
 VAC_KEYWORDS <- c("vac", "hawaii", "galapagos", "trip", "vacation", "travel")
 
 # ── Excel / UI color palette (ARGB hex strings) ───────────────────────────────

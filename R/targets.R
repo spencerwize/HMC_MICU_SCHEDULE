@@ -37,12 +37,21 @@ compute_targets <- function(time_off) {
           target <- if (avail >= 6) 6L else base
           sched_target <- max(0L, target - credited)
 
+          # soft_min: scheduling urgency drops once this floor is reached.
+          # The person can still receive up to sched_target shifts; they are
+          # simply deprioritised relative to people below their own soft_min.
+          flex_floor <- FLEX_TARGETS[[person]]
+          soft_min   <- if (!is.null(flex_floor))
+                          max(0L, min(as.integer(flex_floor), sched_target))
+                        else sched_target
+
           list(
             pp_name      = pp_name,
             avail        = avail,
             credited     = credited,
             target       = target,
             sched_target = sched_target,
+            soft_min     = soft_min,
             off_days     = off_days,
             vac_days     = vac_days,
             cme_days     = cme_days,
