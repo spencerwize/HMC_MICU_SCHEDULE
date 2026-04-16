@@ -221,7 +221,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         epsel   = 1e-6,
         epsb    = 1e-6,
         epsd    = 1e-6,
-        presolve = "PRESOLVE_ROWS"
+        presolve = "rows"
       )
 
       # ── Objective ────────────────────────────────────────────────────────────
