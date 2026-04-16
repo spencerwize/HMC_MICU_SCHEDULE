@@ -401,10 +401,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         columns = nX + seq_len(nZ))
 
       # ── Report model size and solve ──────────────────────────────────────────
-      dims <- lpSolveAPI::dim.lp(model)
       message(sprintf(
-        "  ILP: %d vars (%d binary, %d continuous), %d constraints",
-        nV, nX, nZ, dims[1L]))
+        "  ILP: %d vars (%d binary, %d continuous)",
+        nV, nX, nZ))
 
       status <- lpSolveAPI::solve.lp(model)
 
