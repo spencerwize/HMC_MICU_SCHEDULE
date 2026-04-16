@@ -206,12 +206,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       nX  <- nP * nD * nS
       xidx <- function(p, d, s) (p - 1L) * nD * nS + (d - 1L) * nS + s
 
-      # Auxiliary z[p, d, s_day]  continuous [0,1]; s_day ∈ 1..3 (day slots)
-      # Represents day-before-night occurrence: x[p,d,s_day] × x[p,d+1,Night]
-      nZ  <- nP * (nD - 1L) * nDS
-      nV  <- nX + nZ
-      zidx <- function(p, d, s_day)
-        nX + (p - 1L) * (nD - 1L) * nDS + (d - 1L) * nDS + s_day
+      nV  <- nX   # no auxiliary z variables; day→night gap is a hard constraint
 
       # ── Create LP model ──────────────────────────────────────────────────────
       model <- lpSolveAPI::make.lp(nrow = 0L, ncol = nV)
@@ -225,7 +220,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       )
 
       # ── Objective ────────────────────────────────────────────────────────────
-      # w[APP1]=4, w[Night]=4, w[APP2]=2, w[Roaming]=2; z penalty = −8
+      # w[APP1]=4, w[Night]=4, w[APP2]=2, w[Roaming]=2
       obj <- numeric(nV)
       for (p in seq_len(nP)) {
         for (d in seq_len(nD)) {
@@ -233,10 +228,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           obj[xidx(p, d, S_APP2)]  <- 2
           obj[xidx(p, d, S_ROAM)]  <- 2
           obj[xidx(p, d, S_NIGHT)] <- 4
-        }
-        for (d in seq_len(nD - 1L)) {
-          for (sd in seq_len(nDS))
-            obj[zidx(p, d, sd)] <- -8
         }
       }
       lpSolveAPI::set.objfn(model, obj)
@@ -318,24 +309,24 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C8: Night recovery (2 days) — x[p,d,Night]+x[p,d+2,s] ≤ 1 ───────────
+      # ── C8: Day→Night 1-day gap (Rule 2) — x[p,d,s_day]+x[p,d+1,Night] ≤ 1 ───
       for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 2L)) {
-          ni <- xidx(pi, di, S_NIGHT)
+        for (di in seq_len(nD - 1L)) {
+          ni <- xidx(pi, di + 1L, S_NIGHT)
           for (s in DAY_S) {
             lpSolveAPI::add.constraint(model,
               xt = c(1, 1), type = "<=", rhs = 1,
-              indices = c(ni, xidx(pi, di + 2L, s)))
+              indices = c(xidx(pi, di, s), ni))
           }
         }
       }
 
-      # ── C9: Max 3 consecutive nights — Σ_{k=0}^3 x[p,d+k,Night] ≤ 3 ─────────
+      # ── C9: Max 4 consecutive nights — Σ_{k=0}^4 x[p,d+k,Night] ≤ 4 ─────────
       for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 3L)) {
-          cols <- vapply(0:3, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
+        for (di in seq_len(nD - 4L)) {
+          cols <- vapply(0:4, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
           lpSolveAPI::add.constraint(model,
-            xt = rep(1, 4L), type = "<=", rhs = 3, indices = cols)
+            xt = rep(1, 5L), type = "<=", rhs = 4, indices = cols)
         }
       }
 
@@ -378,35 +369,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C13: Day-before-night lower bound — z[p,d,s] ≥ x[p,d,s]+x[p,d+1,Nt]-1
-      # Combined with z ≥ 0 and z ≤ 1 (from bounds), this forces z = 1 exactly
-      # when both x[p,d,s_day]=1 and x[p,d+1,Night]=1, and z = 0 otherwise.
-      for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 1L)) {
-          ni <- xidx(pi, di + 1L, S_NIGHT)
-          for (sd in seq_len(nDS)) {
-            zi <- zidx(pi, di, sd)
-            xi <- xidx(pi, di, sd)
-            # z ≥ x + x_night - 1
-            lpSolveAPI::add.constraint(model,
-              xt = c(-1, 1, 1), type = ">=", rhs = -1L,
-              indices = c(zi, xi, ni))
-          }
-        }
-      }
-
       # ── Set variable types ───────────────────────────────────────────────────
-      # x variables are binary; z variables are continuous [0,1]
       lpSolveAPI::set.type(model, columns = seq_len(nX), type = "binary")
-      # z upper bound = 1 (lower = 0 is the default)
-      lpSolveAPI::set.bounds(model,
-        lower = rep(0, nZ), upper = rep(1, nZ),
-        columns = nX + seq_len(nZ))
 
       # ── Report model size and solve ──────────────────────────────────────────
-      message(sprintf(
-        "  ILP: %d vars (%d binary, %d continuous)",
-        nV, nX, nZ))
+      message(sprintf("  ILP: %d binary vars", nX))
 
       status <- solve(model)
 
@@ -428,7 +395,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       list(sol       = sol,
            nP        = nP,
            nD        = nD,
-           nS        = nS,
            xidx      = xidx,
            dates_vec = dates_vec)
     },
