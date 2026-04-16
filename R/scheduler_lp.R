@@ -255,17 +255,24 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       # ── Variable index helpers ───────────────────────────────────────────────
       # Primary x[p, d, s]  binary; s ∈ 1..4
-      nX  <- nP * nD * nS
+      nX   <- nP * nD * nS
       xidx <- function(p, d, s) (p - 1L) * nD * nS + (d - 1L) * nS + s
 
       # Fairness auxiliary variables (8 continuous): max/min for nights, total,
       # weekend shifts, and roaming — indexed nX+1 through nX+8.
       nF           <- 8L
-      nV           <- nX + nF
       I_MAX_NIGHTS <- nX + 1L;  I_MIN_NIGHTS <- nX + 2L
       I_MAX_TOTAL  <- nX + 3L;  I_MIN_TOTAL  <- nX + 4L
       I_MAX_WKND   <- nX + 5L;  I_MIN_WKND   <- nX + 6L
       I_MAX_ROAM   <- nX + 7L;  I_MIN_ROAM   <- nX + 8L
+
+      # work[p,d] continuous auxiliary in [0,1] — equals Σ_s x[p,d,s].
+      # Because C4 ensures the sum ≤ 1 and x are binary, work is automatically
+      # integer-valued; declaring it continuous avoids extra branching.
+      nW   <- nP * nD
+      widx <- function(p, d) nX + nF + (p - 1L) * nD + d
+
+      nV   <- nX + nF + nW
 
       # ── Create LP model ──────────────────────────────────────────────────────
       model <- lpSolveAPI::make.lp(nrow = 0L, ncol = nV)
@@ -327,6 +334,18 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           cols <- vapply(seq_len(nS), function(s) xidx(p, d, s), integer(1L))
           lpSolveAPI::add.constraint(model,
             xt = rep(1, nS), type = "<=", rhs = 1, indices = cols)
+        }
+      }
+
+      # ── C_work: work[p,d] = Σ_s x[p,d,s] ───────────────────────────────────────
+      # Defines the "is-working" auxiliary.  Used by C10 to reduce constraint
+      # density from 20 coefficients/row to 5.
+      for (pi in seq_len(nP)) {
+        for (di in seq_len(nD)) {
+          x_cols <- vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L))
+          lpSolveAPI::add.constraint(model,
+            xt = c(rep(1L, nS), -1L), type = "=", rhs = 0L,
+            indices = c(x_cols, widx(pi, di)))
         }
       }
 
@@ -401,14 +420,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C10: Max 4 consecutive working days — Σ_{k=0}^4 Σ_s x[p,d+k,s] ≤ 4 ──
+      # ── C10: Max 4 consecutive working days — Σ_{k=0}^4 work[p,d+k] ≤ 4 ──────
+      # Uses work[p,d] auxiliary: 5 coefficients/row instead of 20.
       if (add_c10) {
         for (pi in seq_len(nP)) {
           for (di in seq_len(nD - 4L)) {
-            cols <- as.integer(unlist(lapply(0:4, function(k)
-              vapply(seq_len(nS), function(s) xidx(pi, di + k, s), integer(1L)))))
+            cols <- vapply(0:4, function(k) widx(pi, di + k), integer(1L))
             lpSolveAPI::add.constraint(model,
-              xt = rep(1, 20L), type = "<=", rhs = 4, indices = cols)
+              xt = rep(1L, 5L), type = "<=", rhs = 4L, indices = cols)
           }
         }
       }
@@ -513,15 +532,19 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── Set variable types ───────────────────────────────────────────────────
+      # ── Set variable types and bounds ────────────────────────────────────────
       lpSolveAPI::set.type(model, columns = seq_len(nX), type = "binary")
       # Fairness auxiliaries: continuous [0, nD]
       lpSolveAPI::set.bounds(model,
         lower = rep(0, nF), upper = rep(as.double(nD), nF),
         columns = nX + seq_len(nF))
+      # work auxiliaries: continuous [0, 1] (naturally integer-valued via C4)
+      lpSolveAPI::set.bounds(model,
+        lower = rep(0, nW), upper = rep(1, nW),
+        columns = nX + nF + seq_len(nW))
 
       # ── Report model size and solve ──────────────────────────────────────────
-      message(sprintf("  ILP: %d binary + %d fairness vars", nX, nF))
+      message(sprintf("  ILP: %d binary + %d fairness + %d work vars", nX, nF, nW))
 
       status <- solve(model)
 
