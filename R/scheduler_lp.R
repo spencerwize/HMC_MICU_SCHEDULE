@@ -100,24 +100,35 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
     # ── Main entry point ──────────────────────────────────────────────────────
     run = function() {
-      if (!requireNamespace("lpSolveAPI", quietly = TRUE)) {
-        message("lpSolveAPI not installed — falling back to greedy scheduler.")
-        message("  Install with:  install.packages('lpSolveAPI')")
-        return(private$run_greedy_fallback())
+      if (!requireNamespace("lpSolveAPI", quietly = TRUE))
+        stop("lpSolveAPI is not installed. Run: install.packages('lpSolveAPI')")
+
+      tiers <- private$RELAX_TIERS
+      nT    <- length(tiers)
+
+      for (ti in seq_len(nT)) {
+        t <- tiers[[ti]]
+        message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
+        result <- private$build_and_solve(
+          night_required   = t$night_req,
+          roam_in_obj      = t$roam_obj,
+          pp_cap_reduction = t$pp_red,
+          add_c8           = t$c8,
+          add_c9           = t$c9,
+          add_c10          = t$c10,
+          add_c13          = t$c13,
+          add_c14          = t$c14
+        )
+        if (!is.null(result)) {
+          message(sprintf("  Solution found at tier %d: %s", ti, t$label))
+          message("  Translating ILP solution to schedule...")
+          private$populate_from_solution(result)
+          message("  Done.")
+          return(invisible(self))
+        }
       }
 
-      message("  Building ILP model...")
-      result <- private$build_and_solve()
-
-      if (is.null(result)) {
-        message("  ILP returned no solution — falling back to greedy scheduler.")
-        return(private$run_greedy_fallback())
-      }
-
-      message("  Translating ILP solution to schedule...")
-      private$populate_from_solution(result)
-      message("  Done.")
-      invisible(self)
+      private$report_and_stop()
     },
 
     # ── Export (identical to Scheduler) ───────────────────────────────────────
