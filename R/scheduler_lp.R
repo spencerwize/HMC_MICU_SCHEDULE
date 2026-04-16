@@ -600,26 +600,77 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
     },
 
-    # ── Greedy fallback (copies Scheduler state into self) ──────────────────────
-    run_greedy_fallback = function() {
-      message("  Pre-seeding holidays...")
-      gs <- Scheduler$new(self$time_off, self$targets)
-      gs$preseed_holidays()
-      message("  Scheduling all slots (MRV hardest-first + lookahead)...")
-      gs$schedule_all()
-      message("  Cleanup pass...")
-      gs$cleanup_pass()
-      message("  Swap repair pass...")
-      gs$swap_repair_pass()
-      message("  Force-filling APP1...")
-      gs$force_fill_app1()
+    # ── Diagnostics: run after all tiers fail, then stop with error ────────────
+    report_and_stop = function() {
+      dates_vec <- as.Date(self$dates, origin = "1970-01-01")
+      nP        <- length(STAFF)
+      nD        <- length(dates_vec)
 
-      self$schedule      <- gs$schedule
-      self$person_nights <- gs$person_nights
-      self$person_shifts <- gs$person_shifts
-      self$pp_counts     <- gs$pp_counts
-      self$granted_pto   <- gs$granted_pto
-      invisible(self)
+      is_blocked <- function(person, d) {
+        pdata <- self$time_off[[person]]
+        nrow(pdata) > 0 &&
+          any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))
+      }
+
+      issues <- character(0)
+
+      # 1. Per-day: count available staff; flag days where < 2 are free
+      for (di in seq_len(nD)) {
+        d       <- dates_vec[di]
+        n_avail <- sum(vapply(STAFF, function(p) !is_blocked(p, d), logical(1L)))
+        if (n_avail < 2L) {
+          issues <- c(issues, sprintf(
+            "[COVERAGE] %s (%s): only %d/%d staff available — need >= 2 for APP1+Night",
+            format(d), weekdays(d, abbreviate = TRUE), n_avail, nP))
+        }
+      }
+
+      # 2. Per-person per-PP: flag where sched_target > available days
+      for (person in STAFF) {
+        for (ppi in seq_len(nrow(PAY_PERIODS))) {
+          pp_name  <- PAY_PERIODS$name[ppi]
+          pp_d     <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
+          pp_d     <- pp_d[pp_d %in% dates_vec]
+          if (length(pp_d) == 0L) next
+          n_blocked <- sum(vapply(pp_d, function(d) is_blocked(person, d), logical(1L)))
+          n_avail   <- length(pp_d) - n_blocked
+          target    <- self$targets[[person]][[pp_name]]$sched_target
+          if (!is.null(target) && target > n_avail) {
+            issues <- c(issues, sprintf(
+              "[TARGET]   %s / %s: sched_target=%d but only %d/%d days free (blocked=%d)",
+              person, pp_name, target, n_avail, length(pp_d), n_blocked))
+          }
+        }
+      }
+
+      # 3. Per-person: flag anyone with no window of >= 2 consecutive free days
+      for (person in STAFF) {
+        free    <- vapply(dates_vec, function(d) !is_blocked(person, d), logical(1L))
+        max_run <- 0L; run <- 0L
+        for (f in free) {
+          if (f) { run <- run + 1L; if (run > max_run) max_run <- run } else run <- 0L
+        }
+        if (max_run < 2L) {
+          issues <- c(issues, sprintf(
+            "[NIGHTS]   %s: no window of 2+ consecutive free days — C13 unsatisfiable",
+            person))
+        }
+      }
+
+      message("\n  ─── ILP SCHEDULING DIAGNOSTICS ────────────────────────────")
+      if (length(issues) == 0L) {
+        message("  No obvious availability or target issues detected.")
+        message("  The model may simply be too complex for the 2-minute time budget.")
+        message("  Consider reducing MAX_NIGHTS_TOTAL, loosening PP targets, or")
+        message("  removing time-off entries that conflict with coverage requirements.")
+      } else {
+        message(sprintf("  %d potential issue(s) found:\n", length(issues)))
+        for (iss in issues) message(sprintf("  %s", iss))
+      }
+      message("  ────────────────────────────────────────────────────────────\n")
+
+      stop("ILP scheduling failed after all relaxation tiers — see diagnostics above.",
+           call. = FALSE)
     }
   )
 )
