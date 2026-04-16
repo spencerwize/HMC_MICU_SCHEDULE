@@ -9,6 +9,7 @@ suppressPackageStartupMessages({
   library(lubridate)
   library(dplyr)
   library(tidyr)
+  library(lpSolveAPI)
   library(shiny)
   library(bslib)
   library(reactable)
@@ -109,8 +110,8 @@ run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
   if (verbose) message("Computing per-PP targets...")
   targets  <- compute_targets(time_off)
 
-  if (verbose) message("Running scheduler...")
-  sched    <- Scheduler$new(time_off, targets)
+  if (verbose) message("Running ILP scheduler...")
+  sched    <- SchedulerLP$new(time_off, targets)
   sched$run()
 
   if (verbose) message("Validating...")
