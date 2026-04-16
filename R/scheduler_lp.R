@@ -369,6 +369,29 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C13: Min 2 consecutive nights (Rule 3) ───────────────────────────────
+      # Each night shift must have at least one adjacent night (no isolated singles).
+      # Boundary d=1: x[p,1,Nt] ≤ x[p,2,Nt]
+      # Interior:     x[p,d-1,Nt] + x[p,d+1,Nt] ≥ x[p,d,Nt]
+      # Boundary d=nD: x[p,nD,Nt] ≤ x[p,nD-1,Nt]
+      for (pi in seq_len(nP)) {
+        lpSolveAPI::add.constraint(model,
+          xt = c(1, -1), type = "<=", rhs = 0L,
+          indices = c(xidx(pi, 1L, S_NIGHT), xidx(pi, 2L, S_NIGHT)))
+        if (nD >= 3L) {
+          for (di in 2L:(nD - 1L)) {
+            lpSolveAPI::add.constraint(model,
+              xt = c(1, 1, -1), type = ">=", rhs = 0L,
+              indices = c(xidx(pi, di - 1L, S_NIGHT),
+                          xidx(pi, di + 1L, S_NIGHT),
+                          xidx(pi, di,      S_NIGHT)))
+          }
+        }
+        lpSolveAPI::add.constraint(model,
+          xt = c(1, -1), type = "<=", rhs = 0L,
+          indices = c(xidx(pi, nD, S_NIGHT), xidx(pi, nD - 1L, S_NIGHT)))
+      }
+
       # ── Set variable types ───────────────────────────────────────────────────
       lpSolveAPI::set.type(model, columns = seq_len(nX), type = "binary")
 
