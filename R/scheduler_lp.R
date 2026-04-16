@@ -206,7 +206,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       nX  <- nP * nD * nS
       xidx <- function(p, d, s) (p - 1L) * nD * nS + (d - 1L) * nS + s
 
-      nV  <- nX   # no auxiliary z variables; day→night gap is a hard constraint
+      # Fairness auxiliary variables (8 continuous): max/min for nights, total,
+      # weekend shifts, and roaming — indexed nX+1 through nX+8.
+      nF           <- 8L
+      nV           <- nX + nF
+      I_MAX_NIGHTS <- nX + 1L;  I_MIN_NIGHTS <- nX + 2L
+      I_MAX_TOTAL  <- nX + 3L;  I_MIN_TOTAL  <- nX + 4L
+      I_MAX_WKND   <- nX + 5L;  I_MIN_WKND   <- nX + 6L
+      I_MAX_ROAM   <- nX + 7L;  I_MIN_ROAM   <- nX + 8L
 
       # ── Create LP model ──────────────────────────────────────────────────────
       model <- lpSolveAPI::make.lp(nrow = 0L, ncol = nV)
@@ -221,6 +228,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       # ── Objective ────────────────────────────────────────────────────────────
       # w[APP1]=4, w[Night]=4, w[APP2]=2, w[Roaming]=2
+      # Fairness penalties are tiny (0.003–0.01) so they only break ties.
       obj <- numeric(nV)
       for (p in seq_len(nP)) {
         for (d in seq_len(nD)) {
@@ -230,6 +238,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           obj[xidx(p, d, S_NIGHT)] <- 4
         }
       }
+      obj[I_MAX_NIGHTS] <- -0.010;  obj[I_MIN_NIGHTS] <- +0.010
+      obj[I_MAX_TOTAL]  <- -0.005;  obj[I_MIN_TOTAL]  <- +0.005
+      obj[I_MAX_WKND]   <- -0.003;  obj[I_MIN_WKND]   <- +0.003
+      obj[I_MAX_ROAM]   <- -0.003;  obj[I_MIN_ROAM]   <- +0.003
       lpSolveAPI::set.objfn(model, obj)
 
       # ── C1: Slot uniqueness — Σ_p x[p,d,s] ≤ 1 ──────────────────────────────
@@ -392,11 +404,61 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           indices = c(xidx(pi, nD, S_NIGHT), xidx(pi, nD - 1L, S_NIGHT)))
       }
 
+      # ── C14: Fairness min/max bounds ─────────────────────────────────────────
+      # For each metric M and person p: Σ x ≤ max_M  and  Σ x ≥ min_M.
+      # The objective then minimises (max_M − min_M) via tiny ε coefficients.
+      weekend_di <- which(weekdays(dates_vec) %in% c("Saturday", "Sunday"))
+      for (pi in seq_len(nP)) {
+        night_cols <- vapply(seq_len(nD), function(di)
+          xidx(pi, di, S_NIGHT), integer(1L))
+        all_cols <- as.integer(unlist(lapply(seq_len(nD), function(di)
+          vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
+        roam_cols <- vapply(seq_len(nD), function(di)
+          xidx(pi, di, S_ROAM), integer(1L))
+
+        # Nights
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD), -1L), type = "<=", rhs = 0,
+          indices = c(night_cols, I_MAX_NIGHTS))
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD), -1L), type = ">=", rhs = 0,
+          indices = c(night_cols, I_MIN_NIGHTS))
+        # Total shifts
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD * nS), -1L), type = "<=", rhs = 0,
+          indices = c(all_cols, I_MAX_TOTAL))
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD * nS), -1L), type = ">=", rhs = 0,
+          indices = c(all_cols, I_MIN_TOTAL))
+        # Roaming
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD), -1L), type = "<=", rhs = 0,
+          indices = c(roam_cols, I_MAX_ROAM))
+        lpSolveAPI::add.constraint(model,
+          xt = c(rep(1, nD), -1L), type = ">=", rhs = 0,
+          indices = c(roam_cols, I_MIN_ROAM))
+        # Weekend shifts
+        if (length(weekend_di) > 0) {
+          wknd_cols <- as.integer(unlist(lapply(weekend_di, function(di)
+            vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
+          lpSolveAPI::add.constraint(model,
+            xt = c(rep(1, length(wknd_cols)), -1L), type = "<=", rhs = 0,
+            indices = c(wknd_cols, I_MAX_WKND))
+          lpSolveAPI::add.constraint(model,
+            xt = c(rep(1, length(wknd_cols)), -1L), type = ">=", rhs = 0,
+            indices = c(wknd_cols, I_MIN_WKND))
+        }
+      }
+
       # ── Set variable types ───────────────────────────────────────────────────
       lpSolveAPI::set.type(model, columns = seq_len(nX), type = "binary")
+      # Fairness auxiliaries: continuous [0, nD]
+      lpSolveAPI::set.bounds(model,
+        lower = rep(0, nF), upper = rep(as.double(nD), nF),
+        columns = nX + seq_len(nF))
 
       # ── Report model size and solve ──────────────────────────────────────────
-      message(sprintf("  ILP: %d binary vars", nX))
+      message(sprintf("  ILP: %d binary + %d fairness vars", nX, nF))
 
       status <- solve(model)
 
