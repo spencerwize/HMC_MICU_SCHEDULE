@@ -183,6 +183,38 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
   # ── Private implementation ─────────────────────────────────────────────────
   private = list(
 
+    # Relaxation cascade: solver tries each tier in order, stopping at the
+    # first feasible solution.  Each tier adds more flexibility than the last.
+    RELAX_TIERS = list(
+      list(label     = "Full model — all rules",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+      list(label     = "Night shift may be unstaffed",
+           night_req = FALSE, roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+      list(label     = "APP3/Roaming shift may be unstaffed",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+      list(label     = "PP cap reduced by 1",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+      list(label     = "Drop C13 (min 2 consecutive nights)",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE),
+      list(label     = "Drop C8 (day -> night gap)",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+      list(label     = "Drop C8 + C13",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE),
+      list(label     = "Drop C8 + C13 + C10",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE),
+      list(label     = "Hard coverage only (C1-C7, C11, C12)",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE)
+    ),
+
     # ── Build and solve the ILP ────────────────────────────────────────────────
     build_and_solve = function() {
 
