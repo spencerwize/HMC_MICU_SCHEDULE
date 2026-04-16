@@ -24,6 +24,7 @@ r_files <- c(
   "R/parse_time_off.R",
   "R/targets.R",
   "R/scheduler.R",
+  "R/scheduler_lp.R",
   "R/validate.R",
   "R/excel_output.R"
 )

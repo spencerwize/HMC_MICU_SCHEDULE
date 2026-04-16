@@ -11,6 +11,9 @@ pkgs <- c(
   "dplyr",       # Data manipulation
   "tidyr",       # Data reshaping
 
+  # ILP scheduler (SchedulerLP)
+  "lpSolveAPI",  # R interface to the lp_solve 5.5 MIP solver
+
   # Shiny app
   "shiny",       # Web app framework
   "bslib",       # Bootstrap 5 themes + layouts

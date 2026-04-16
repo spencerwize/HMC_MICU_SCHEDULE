@@ -62,19 +62,9 @@ server <- function(input, output, session) {
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)
 
-      setProgress(0.35, detail = "Pre-seeding holidays…")
-      sched <- Scheduler$new(time_off, targets)
-      sched$preseed_holidays()
-
-      setProgress(0.50, detail = "Scheduling all slots (MRV)…")
-      sched$schedule_all()
-
-      setProgress(0.82, detail = "Cleanup + swap repair…")
-      sched$cleanup_pass()
-      sched$swap_repair_pass()
-
-      setProgress(0.92, detail = "Force-filling APP1…")
-      sched$force_fill_app1()
+      setProgress(0.35, detail = "Building and solving schedule (ILP)…")
+      sched <- SchedulerLP$new(time_off, targets)
+      sched$run()
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
