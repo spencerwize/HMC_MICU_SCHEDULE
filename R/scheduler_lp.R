@@ -216,7 +216,16 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     ),
 
     # ── Build and solve the ILP ────────────────────────────────────────────────
-    build_and_solve = function() {
+    build_and_solve = function(
+      night_required   = TRUE,   # C3: Night = 1 (TRUE) or <= 1 (FALSE)
+      roam_in_obj      = TRUE,   # include Roaming weight in objective
+      pp_cap_reduction = 0L,     # subtract from each person's PP sched_target
+      add_c8           = TRUE,   # day -> night 1-day gap
+      add_c9           = TRUE,   # max 4 consecutive nights
+      add_c10          = TRUE,   # max 4 consecutive working days
+      add_c13          = TRUE,   # min 2 consecutive nights
+      add_c14          = TRUE    # fairness min/max bounds
+    ) {
 
       requireNamespace("lpSolveAPI", quietly = TRUE)
 
@@ -250,23 +259,24 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # ── Create LP model ──────────────────────────────────────────────────────
       model <- lpSolveAPI::make.lp(nrow = 0L, ncol = nV)
       lpSolveAPI::lp.control(model,
-        sense   = "max",
-        timeout = 300L,      # 5-minute wall-clock limit
-        epsel   = 1e-6,
-        epsb    = 1e-6,
-        epsd    = 1e-6,
+        sense    = "max",
+        timeout  = 120L,     # 2-minute limit per tier
+        epsel    = 1e-6,
+        epsb     = 1e-6,
+        epsd     = 1e-6,
         presolve = "rows"
       )
 
       # ── Objective ────────────────────────────────────────────────────────────
-      # w[APP1]=4, w[Night]=4, w[APP2]=2, w[Roaming]=2
+      # w[APP1]=4, w[Night]=4, w[APP2]=2, w[Roaming]=2 (or 0 when relaxed)
       # Fairness penalties are tiny (0.003–0.01) so they only break ties.
+      roam_w <- if (roam_in_obj) 2 else 0
       obj <- numeric(nV)
       for (p in seq_len(nP)) {
         for (d in seq_len(nD)) {
           obj[xidx(p, d, S_APP1)]  <- 4
           obj[xidx(p, d, S_APP2)]  <- 2
-          obj[xidx(p, d, S_ROAM)]  <- 2
+          obj[xidx(p, d, S_ROAM)]  <- roam_w
           obj[xidx(p, d, S_NIGHT)] <- 4
         }
       }
@@ -292,11 +302,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           xt = rep(1, nP), type = "=", rhs = 1, indices = cols)
       }
 
-      # ── C3: Night must always be filled — Σ_p x[p,d,Night] = 1 ──────────────
+      # ── C3: Night coverage — = 1 (required) or <= 1 (may be unstaffed) ────────
+      c3_type <- if (night_required) "=" else "<="
       for (d in seq_len(nD)) {
         cols <- vapply(seq_len(nP), function(p) xidx(p, d, S_NIGHT), integer(1L))
         lpSolveAPI::add.constraint(model,
-          xt = rep(1, nP), type = "=", rhs = 1, indices = cols)
+          xt = rep(1, nP), type = c3_type, rhs = 1, indices = cols)
       }
 
       # ── C4: No double-booking — Σ_s x[p,d,s] ≤ 1 ────────────────────────────
@@ -332,7 +343,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_name <- PAY_PERIODS$name[ppi]
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           di_pp   <- which(dates_vec %in% pp_d)
-          cap     <- self$targets[[person]][[pp_name]]$sched_target
+          cap     <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
+                              pp_cap_reduction)
           if (length(di_pp) == 0 || cap <= 0) next
           cols <- as.integer(unlist(lapply(di_pp, function(di)
             vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
@@ -354,33 +366,39 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── C8: Day→Night 1-day gap (Rule 2) — x[p,d,s_day]+x[p,d+1,Night] ≤ 1 ───
-      for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 1L)) {
-          ni <- xidx(pi, di + 1L, S_NIGHT)
-          for (s in DAY_S) {
-            lpSolveAPI::add.constraint(model,
-              xt = c(1, 1), type = "<=", rhs = 1,
-              indices = c(xidx(pi, di, s), ni))
+      if (add_c8) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 1L)) {
+            ni <- xidx(pi, di + 1L, S_NIGHT)
+            for (s in DAY_S) {
+              lpSolveAPI::add.constraint(model,
+                xt = c(1, 1), type = "<=", rhs = 1,
+                indices = c(xidx(pi, di, s), ni))
+            }
           }
         }
       }
 
       # ── C9: Max 4 consecutive nights — Σ_{k=0}^4 x[p,d+k,Night] ≤ 4 ─────────
-      for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 4L)) {
-          cols <- vapply(0:4, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
-          lpSolveAPI::add.constraint(model,
-            xt = rep(1, 5L), type = "<=", rhs = 4, indices = cols)
+      if (add_c9) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 4L)) {
+            cols <- vapply(0:4, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
+            lpSolveAPI::add.constraint(model,
+              xt = rep(1, 5L), type = "<=", rhs = 4, indices = cols)
+          }
         }
       }
 
       # ── C10: Max 4 consecutive working days — Σ_{k=0}^4 Σ_s x[p,d+k,s] ≤ 4 ──
-      for (pi in seq_len(nP)) {
-        for (di in seq_len(nD - 4L)) {
-          cols <- as.integer(unlist(lapply(0:4, function(k)
-            vapply(seq_len(nS), function(s) xidx(pi, di + k, s), integer(1L)))))
-          lpSolveAPI::add.constraint(model,
-            xt = rep(1, 20L), type = "<=", rhs = 4, indices = cols)
+      if (add_c10) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 4L)) {
+            cols <- as.integer(unlist(lapply(0:4, function(k)
+              vapply(seq_len(nS), function(s) xidx(pi, di + k, s), integer(1L)))))
+            lpSolveAPI::add.constraint(model,
+              xt = rep(1, 20L), type = "<=", rhs = 4, indices = cols)
+          }
         }
       }
 
@@ -418,29 +436,31 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # Boundary d=1: x[p,1,Nt] ≤ x[p,2,Nt]
       # Interior:     x[p,d-1,Nt] + x[p,d+1,Nt] ≥ x[p,d,Nt]
       # Boundary d=nD: x[p,nD,Nt] ≤ x[p,nD-1,Nt]
-      for (pi in seq_len(nP)) {
-        lpSolveAPI::add.constraint(model,
-          xt = c(1, -1), type = "<=", rhs = 0L,
-          indices = c(xidx(pi, 1L, S_NIGHT), xidx(pi, 2L, S_NIGHT)))
-        if (nD >= 3L) {
-          for (di in 2L:(nD - 1L)) {
-            lpSolveAPI::add.constraint(model,
-              xt = c(1, 1, -1), type = ">=", rhs = 0L,
-              indices = c(xidx(pi, di - 1L, S_NIGHT),
-                          xidx(pi, di + 1L, S_NIGHT),
-                          xidx(pi, di,      S_NIGHT)))
+      if (add_c13) {
+        for (pi in seq_len(nP)) {
+          lpSolveAPI::add.constraint(model,
+            xt = c(1, -1), type = "<=", rhs = 0L,
+            indices = c(xidx(pi, 1L, S_NIGHT), xidx(pi, 2L, S_NIGHT)))
+          if (nD >= 3L) {
+            for (di in 2L:(nD - 1L)) {
+              lpSolveAPI::add.constraint(model,
+                xt = c(1, 1, -1), type = ">=", rhs = 0L,
+                indices = c(xidx(pi, di - 1L, S_NIGHT),
+                            xidx(pi, di + 1L, S_NIGHT),
+                            xidx(pi, di,      S_NIGHT)))
+            }
           }
+          lpSolveAPI::add.constraint(model,
+            xt = c(1, -1), type = "<=", rhs = 0L,
+            indices = c(xidx(pi, nD, S_NIGHT), xidx(pi, nD - 1L, S_NIGHT)))
         }
-        lpSolveAPI::add.constraint(model,
-          xt = c(1, -1), type = "<=", rhs = 0L,
-          indices = c(xidx(pi, nD, S_NIGHT), xidx(pi, nD - 1L, S_NIGHT)))
       }
 
       # ── C14: Fairness min/max bounds ─────────────────────────────────────────
       # For each metric M and person p: Σ x ≤ max_M  and  Σ x ≥ min_M.
       # The objective then minimises (max_M − min_M) via tiny ε coefficients.
       weekend_di <- which(weekdays(dates_vec) %in% c("Saturday", "Sunday"))
-      for (pi in seq_len(nP)) {
+      if (add_c14) for (pi in seq_len(nP)) {
         night_cols <- vapply(seq_len(nD), function(di)
           xidx(pi, di, S_NIGHT), integer(1L))
         all_cols <- as.integer(unlist(lapply(seq_len(nD), function(di)
@@ -494,14 +514,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       status <- solve(model)
 
-      # 0 = OPTIMAL, 1 = SUBOPTIMAL (timeout with feasible sol), others = failure
+      # 0=OPTIMAL, 1=SUBOPTIMAL (timeout with feasible sol), others=failure
       if (status == 0L) {
         message("  Solver: OPTIMAL solution found.")
       } else if (status == 1L) {
         message("  Solver: SUBOPTIMAL — returning best solution found within timeout.")
       } else {
-        message(sprintf("  Solver status %d (2=infeasible, 3=unbounded, 5=error).",
-                        status))
+        reason <- switch(as.character(status),
+          "2" = "infeasible",
+          "3" = "unbounded (likely a variable-bounds bug)",
+          "5" = "numerical failure",
+          "6" = "aborted",
+          "7" = "timeout — no feasible solution found within 2 minutes",
+          sprintf("unknown status %d", status))
+        message(sprintf("  Solver failed: %s.", reason))
         return(NULL)
       }
 
