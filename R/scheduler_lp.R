@@ -358,6 +358,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── C12: Holiday pre-seeds — fix x[p,d,s] = 1 ────────────────────────────
+      # Skip pre-seed if the person is marked off or vac that day (Rule 1).
       slot_idx <- c(APP1 = S_APP1, APP2 = S_APP2, Roaming = S_ROAM, Night = S_NIGHT)
       for (ds in names(HOLIDAYS)) {
         d_hol <- as.Date(ds)
@@ -369,7 +370,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pi     <- which(STAFF == person)
           si     <- slot_idx[[slot_name]]
           if (length(pi) == 0L || is.null(si) || is.na(si)) next
-          # Set lower=1, upper=1 — overrides any availability bound set in C5
+          pdata  <- self$time_off[[person]]
+          if (nrow(pdata) > 0 &&
+              any(pdata$date == d_hol & pdata$type %in% c("off", "vac"))) next
           lpSolveAPI::set.bounds(model,
             lower = 1, upper = 1, columns = xidx(pi[[1L]], di[[1L]], si))
         }
