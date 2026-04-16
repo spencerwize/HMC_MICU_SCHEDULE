@@ -405,7 +405,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         "  ILP: %d vars (%d binary, %d continuous)",
         nV, nX, nZ))
 
-      status <- lpSolveAPI::solve.lp(model)
+      status <- solve(model)
 
       # 0 = OPTIMAL, 1 = SUBOPTIMAL (timeout with feasible sol), others = failure
       if (status == 0L) {
