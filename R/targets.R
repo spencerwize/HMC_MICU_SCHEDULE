@@ -83,6 +83,7 @@ targets_summary_df <- function(targets) {
         credited     = info$credited,
         target       = info$target,
         sched_target = info$sched_target,
+        soft_min     = info$soft_min,
         stringsAsFactors = FALSE
       )
     })
