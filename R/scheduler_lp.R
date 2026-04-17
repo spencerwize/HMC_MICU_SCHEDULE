@@ -274,12 +274,30 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       nW   <- nP * nD
       widx <- function(p, d) nX + nF + (p - 1L) * nD + d
 
-      nV <- nX + nF + nW
+      # Streak auxiliaries (all continuous [0,1]):
+      #   n3/n4 bias night assignments toward 3-packs (3 > 2 > 4)
+      #   w3/w4 bias work-day runs toward 3-blocks (3 > 4 > 2 > 1)
+      nNS3  <- if (nD >= 3L) nP * (nD - 2L) else 0L
+      nNS4  <- if (nD >= 4L) nP * (nD - 3L) else 0L
+      nWS3  <- if (nD >= 3L) nP * (nD - 2L) else 0L
+      nWS4  <- if (nD >= 4L) nP * (nD - 3L) else 0L
+
+      ns3off <- nX + nF + nW
+      n3idx  <- function(p, d) ns3off + (p - 1L) * (nD - 2L) + d
+      ns4off <- ns3off + nNS3
+      n4idx  <- function(p, d) ns4off + (p - 1L) * (nD - 3L) + d
+      ws3off <- ns4off + nNS4
+      w3idx  <- function(p, d) ws3off + (p - 1L) * (nD - 2L) + d
+      ws4off <- ws3off + nWS3
+      w4idx  <- function(p, d) ws4off + (p - 1L) * (nD - 3L) + d
+
+      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4
 
       # Variable bounds and types
       lb    <- numeric(nV)
-      ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW))
-      types <- c(rep("I", nX), rep("C", nF + nW))
+      ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW),
+                 rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4))
+      types <- c(rep("I", nX), rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -296,6 +314,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       obj[I_MAX_TOTAL]  <- -0.005;  obj[I_MIN_TOTAL]  <- +0.005
       obj[I_MAX_WKND]   <- -0.003;  obj[I_MIN_WKND]   <- +0.003
       obj[I_MAX_ROAM]   <- -0.003;  obj[I_MIN_ROAM]   <- +0.003
+
+      # Streak preference bonuses/penalties (3-packs most preferred)
+      # Night: reward 3-consecutive (+0.50), penalise 4-consecutive (-0.60)
+      #   Net per streak: 2-nights=0, 3-nights=+0.50, 4-nights=+0.40
+      # Work: reward 3-consecutive (+0.30), penalise 4-consecutive (-0.40)
+      #   Net per streak: 1-day=0, 2-days=0, 3-days=+0.30, 4-days=+0.20
+      if (nNS3 > 0L)
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[n3idx(p, d)] <- +0.50
+      if (nNS4 > 0L)
+        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[n4idx(p, d)] <- -0.60
+      if (nWS3 > 0L)
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +0.30
+      if (nWS4 > 0L)
+        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -0.40
 
       # Constraint accumulator (triplet form → sparseMatrix)
       n_con   <- 0L
@@ -364,6 +396,18 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (blocked) {
             for (s in seq_len(nS)) ub[xidx(pi, di, s)] <- 0
           }
+        }
+      }
+
+      # ── C5b: No night shift the day before an off or vacation day ────────────
+      for (pi in seq_len(nP)) {
+        person <- STAFF[pi]
+        pdata  <- self$time_off[[person]]
+        if (nrow(pdata) == 0) next
+        for (di in seq_len(nD - 1L)) {
+          d_next <- dates_vec[di + 1L]
+          if (any(pdata$date == d_next & pdata$type %in% c("off", "vac")))
+            ub[xidx(pi, di, S_NIGHT)] <- 0
         }
       }
 
@@ -498,9 +542,55 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C_n3: Night 3-block — n3[p,d] ≥ Σ_{k=0}^2 x[p,d+k,N] − 2 ────────────
+      if (nNS3 > 0L) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 2L)) {
+            add_con(c(xidx(pi, di, S_NIGHT), xidx(pi, di + 1L, S_NIGHT),
+                      xidx(pi, di + 2L, S_NIGHT), n3idx(pi, di)),
+                    c(1, 1, 1, -1), "<=", 2)
+          }
+        }
+      }
+
+      # ── C_n4: Night 4-block — n4[p,d] ≥ Σ_{k=0}^3 x[p,d+k,N] − 3 ────────────
+      if (nNS4 > 0L) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 3L)) {
+            add_con(c(xidx(pi, di, S_NIGHT), xidx(pi, di + 1L, S_NIGHT),
+                      xidx(pi, di + 2L, S_NIGHT), xidx(pi, di + 3L, S_NIGHT),
+                      n4idx(pi, di)),
+                    c(1, 1, 1, 1, -1), "<=", 3)
+          }
+        }
+      }
+
+      # ── C_w3: Work 3-block — w3[p,d] ≥ Σ_{k=0}^2 work[p,d+k] − 2 ───────────
+      if (nWS3 > 0L) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 2L)) {
+            add_con(c(widx(pi, di), widx(pi, di + 1L), widx(pi, di + 2L),
+                      w3idx(pi, di)),
+                    c(1, 1, 1, -1), "<=", 2)
+          }
+        }
+      }
+
+      # ── C_w4: Work 4-block — w4[p,d] ≥ Σ_{k=0}^3 work[p,d+k] − 3 ───────────
+      if (nWS4 > 0L) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 3L)) {
+            add_con(c(widx(pi, di), widx(pi, di + 1L), widx(pi, di + 2L),
+                      widx(pi, di + 3L), w4idx(pi, di)),
+                    c(1, 1, 1, 1, -1), "<=", 3)
+          }
+        }
+      }
+
       # ── Assemble and solve ────────────────────────────────────────────────────
-      message(sprintf("  ILP: %d binary + %d fairness + %d work vars, %d constraints",
-                      nX, nF, nW, n_con))
+      nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4
+      message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
+                      nX, nCont, n_con))
 
       A <- Matrix::sparseMatrix(i = ri, j = ci, x = vi, dims = c(n_con, nV))
 
