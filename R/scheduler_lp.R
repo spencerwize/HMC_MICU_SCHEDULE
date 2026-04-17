@@ -130,7 +130,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c9           = t$c9,
           add_c10          = t$c10,
           add_c13          = t$c13,
-          add_c14          = t$c14
+          add_c14          = t$c14,
+          add_c15          = t$c15
         )
         if (!is.null(result)) {
           message(sprintf("  Solution found at tier %d: %s", ti, t$label))
@@ -212,31 +213,34 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     RELAX_TIERS = list(
       list(label     = "Full model — all rules",
            night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE),
+      list(label     = "Drop C15 (no isolated single shifts)",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Night shift may be unstaffed",
            night_req = FALSE, roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "APP3/Roaming shift may be unstaffed",
            night_req = FALSE, roam_obj = FALSE, pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "PP cap reduced by 1",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C13 (min 2 consecutive nights)",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 (day -> night gap)",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE),
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 + C13",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE),
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 + C13 + C10",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE),
+           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Hard coverage only (C1-C7, C11, C12)",
            night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE)
+           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE, c15 = FALSE)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -248,7 +252,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c9           = TRUE,
       add_c10          = TRUE,
       add_c13          = TRUE,
-      add_c14          = TRUE
+      add_c14          = TRUE,
+      add_c15          = TRUE   # no isolated single shifts
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -539,6 +544,23 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             add_con(c(wknd_cols, I_MAX_WKND), c(rep(1, length(wknd_cols)), -1L), "<=", 0)
             add_con(c(wknd_cols, I_MIN_WKND), c(rep(1, length(wknd_cols)), -1L), ">=", 0)
           }
+        }
+      }
+
+      # ── C15: No isolated single shifts — work[p,d] ≤ work[p,d-1] + work[p,d+1] ─
+      # Boundary d=1:  work[p,1] ≤ work[p,2]
+      # Interior:      work[p,d-1] + work[p,d+1] ≥ work[p,d]
+      # Boundary d=nD: work[p,nD] ≤ work[p,nD-1]
+      if (add_c15) {
+        for (pi in seq_len(nP)) {
+          add_con(c(widx(pi, 1L), widx(pi, 2L)), c(1, -1), "<=", 0L)
+          if (nD >= 3L) {
+            for (di in 2L:(nD - 1L)) {
+              add_con(c(widx(pi, di - 1L), widx(pi, di + 1L), widx(pi, di)),
+                      c(1, 1, -1), ">=", 0L)
+            }
+          }
+          add_con(c(widx(pi, nD), widx(pi, nD - 1L)), c(1, -1), "<=", 0L)
         }
       }
 
