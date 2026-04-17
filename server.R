@@ -82,6 +82,7 @@ server <- function(input, output, session) {
         time_off   = time_off,
         targets    = targets,
         validation = validation,
+        tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
         grid       = sched$to_person_grid(time_off, targets)
       )
@@ -126,6 +127,22 @@ server <- function(input, output, session) {
   output$stat_errors <- renderText({
     req(pipeline())
     as.character(length(pipeline()$validation$errors))
+  })
+
+  output$stat_tier <- renderUI({
+    req(pipeline())
+    tu  <- pipeline()$tier_used
+    idx <- if (is.null(tu)) NA_integer_ else tu$index
+    lbl <- if (is.null(tu)) "—" else sprintf("%d / 12", idx)
+    cls <- if (is.na(idx))    "text-secondary"
+           else if (idx <= 2) "text-success"
+           else if (idx <= 5) "text-warning"
+           else               "text-danger"
+    tagList(
+      h2(lbl, class = paste(cls, "mb-0")),
+      if (!is.null(tu))
+        tags$small(class = "text-muted", tu$label)
+    )
   })
 
   output$validation_ui <- renderUI({
@@ -472,6 +489,7 @@ server <- function(input, output, session) {
 
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
+        actual < soft_min     ~ "Below minimum",
         actual < sched_target ~ "Under",
         actual > sched_target ~ "Over",
         TRUE                  ~ "On target"
@@ -485,14 +503,16 @@ server <- function(input, output, session) {
         credited     = colDef(name = "CME Credited", width = 100),
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
+        soft_min     = colDef(name = "Min Floor",    width = 80),
         actual       = colDef(name = "Actual",       width = 70),
-        status       = colDef(name = "Status",       width = 90,
+        status       = colDef(name = "Status",       width = 115,
           style = function(value) {
             list(
-              color      = switch(value,
-                "Under"     = "#CC0000",
-                "Over"      = "#0066CC",
-                "On target" = "#009900",
+              color = switch(value,
+                "Below minimum" = "#990000",
+                "Under"         = "#CC6600",
+                "Over"          = "#0066CC",
+                "On target"     = "#009900",
                 "#000"),
               fontWeight = "bold"
             )
@@ -508,5 +528,34 @@ server <- function(input, output, session) {
                            fontWeight = "bold")
       )
     )
+  })
+
+  # ── Count viable schedules (no-good cut enumeration) ──────────────────────
+  count_sol_result <- reactiveVal(NULL)
+
+  observeEvent(input$count_sol_btn, {
+    req(pipeline())
+    sched <- pipeline()$sched
+    lim   <- as.integer(input$count_sol_limit)
+    count_sol_result(NULL)
+    withProgress(message = sprintf("Counting schedules (up to %d)…", lim), value = 0.1, {
+      n <- sched$count_solutions(max_count = lim)
+    })
+    count_sol_result(list(n = n, lim = lim))
+  })
+
+  output$count_sol_ui <- renderUI({
+    res <- count_sol_result()
+    if (is.null(res)) return(NULL)
+    if (res$n >= res$lim) {
+      msg <- sprintf(
+        "Found at least %d distinct feasible schedules (limit reached — there may be more).",
+        res$n)
+      cls <- "alert alert-info mt-2"
+    } else {
+      msg <- sprintf("Found exactly %d distinct feasible schedule(s) satisfying all active constraints.", res$n)
+      cls <- "alert alert-success mt-2"
+    }
+    tags$div(class = cls, tags$strong(msg))
   })
 }
