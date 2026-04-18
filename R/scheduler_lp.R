@@ -132,8 +132,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c13          = t$c13,
           add_c14          = t$c14,
           add_c15          = t$c15,
-          add_c16          = t$c16,
-          allow_pto        = t$allow_pto
+          add_c16          = t$c16
         )
         if (!is.null(result)) {
           message(sprintf("  Solution found at tier %d: %s", ti, t$label))
@@ -213,42 +212,39 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # Relaxation cascade: solver tries each tier in order, stopping at the
     # first feasible solution.  Each tier adds more flexibility than the last.
     RELAX_TIERS = list(
-      list(label="Full model — all rules",
-           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE),
-      list(label="Drop C16 (isolated day-shift pairs allowed)",
-           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE),
-      list(label="Drop C15 + C16 (any run length)",
-           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Night shift may be unstaffed",
-           night_req=FALSE, roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="APP3/Roaming shift may be unstaffed",
-           night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="PP cap reduced by 1",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Drop C13 (min 2 consecutive nights)",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Drop C8 (day -> night gap)",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE,
-           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Drop C8 + C13",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE,
-           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Drop C8 + C13 + C10",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE,
-           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="PTO credits for staff with >4 off/vac days in PP",
-           night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=TRUE,
-           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Hard coverage only (C1-C7, C11, C12)",
-           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=TRUE,
-           c8=FALSE, c9=FALSE, c10=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE)
+      list(label     = "Full model — all rules",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE,  c16 = TRUE),
+      list(label     = "Drop C16 (isolated day-shift pairs allowed)",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE,  c16 = FALSE),
+      list(label     = "Drop C15 + C16 (any run length)",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Night shift may be unstaffed",
+           night_req = FALSE, roam_obj = TRUE,  pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "APP3/Roaming shift may be unstaffed",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 0L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "PP cap reduced by 1",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Drop C13 (min 2 consecutive nights)",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Drop C8 (day -> night gap)",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Drop C8 + C13",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Drop C8 + C13 + C10",
+           night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
+           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+      list(label     = "Hard coverage only (C1-C7, C11, C12)",
+           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
+           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE, c15 = FALSE, c16 = FALSE)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -262,8 +258,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c13          = TRUE,
       add_c14          = TRUE,
       add_c15          = TRUE,   # no isolated single shifts
-      add_c16          = TRUE,   # no isolated 2-day blocks of day shifts (min run 3)
-      allow_pto        = FALSE   # credit off/vac days as PTO when blocked_days > 4
+      add_c16          = TRUE    # no isolated 2-day blocks of day shifts (min run 3)
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -433,18 +428,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_name <- PAY_PERIODS$name[ppi]
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           di_pp   <- which(dates_vec %in% pp_d)
-          pto_credit <- 0L
-          if (allow_pto && length(di_pp) > 0L) {
-            pdata    <- self$time_off[[person]]
-            pp_dates <- pp_d[pp_d %in% dates_vec]
-            n_offvac <- if (nrow(pdata) == 0L) 0L else
-              sum(vapply(pp_dates, function(d)
-                any(pdata$date == d & pdata$type %in% c("off", "vac")),
-                logical(1L)))
-            if (n_offvac > 4L) pto_credit <- n_offvac - 4L
-          }
-          cap <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
-                          pp_cap_reduction - pto_credit)
+          cap     <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
+                              pp_cap_reduction)
           if (length(di_pp) == 0 || cap <= 0) next
           cols <- as.integer(unlist(lapply(di_pp, function(di)
             vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
