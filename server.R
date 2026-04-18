@@ -141,7 +141,7 @@ server <- function(input, output, session) {
     req(pipeline())
     tu  <- pipeline()$tier_used
     idx <- if (is.null(tu)) NA_integer_ else tu$index
-    lbl <- if (is.null(tu)) "—" else sprintf("%d / 12", idx)
+    lbl <- if (is.null(tu)) "—" else sprintf("%d / 15", idx)
     cls <- if (is.na(idx))    "text-secondary"
            else if (idx <= 2) "text-success"
            else if (idx <= 5) "text-warning"

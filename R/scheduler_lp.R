@@ -123,19 +123,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # Helper to call build_and_solve with a tier's parameters
       solve_tier <- function(t, extra_nogo = list()) {
         private$build_and_solve(
-          night_required   = t$night_req,
-          roam_in_obj      = t$roam_obj,
-          pp_cap_reduction = t$pp_red,
-          add_c8           = t$c8,
-          add_c9           = t$c9,
-          add_c10          = t$c10,
-          add_c13          = t$c13,
-          add_c14          = t$c14,
-          add_c15          = t$c15,
-          add_c16          = t$c16,
-          add_c_min        = t$c_min,
-          allow_pto        = t$allow_pto,
-          extra_nogo       = extra_nogo
+          night_required     = t$night_req,
+          roam_in_obj        = t$roam_obj,
+          pp_cap_reduction   = t$pp_red,
+          add_c8             = t$c8,
+          add_c9             = t$c9,
+          add_c10            = t$c10,
+          add_c13            = t$c13,
+          add_c14            = t$c14,
+          add_c15            = t$c15,
+          add_c16            = t$c16,
+          add_c_min          = t$c_min,
+          allow_pto          = t$allow_pto,
+          max_iso_per_person = t$max_iso,
+          extra_nogo         = extra_nogo
         )
       }
 
@@ -192,19 +193,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       count <- 0L
       repeat {
         res <- private$build_and_solve(
-          night_required   = t$night_req,
-          roam_in_obj      = t$roam_obj,
-          pp_cap_reduction = t$pp_red,
-          add_c8           = t$c8,
-          add_c9           = t$c9,
-          add_c10          = t$c10,
-          add_c13          = t$c13,
-          add_c14          = t$c14,
-          add_c15          = t$c15,
-          add_c16          = t$c16,
-          add_c_min        = t$c_min,
-          allow_pto        = t$allow_pto,
-          extra_nogo       = found
+          night_required     = t$night_req,
+          roam_in_obj        = t$roam_obj,
+          pp_cap_reduction   = t$pp_red,
+          add_c8             = t$c8,
+          add_c9             = t$c9,
+          add_c10            = t$c10,
+          add_c13            = t$c13,
+          add_c14            = t$c14,
+          add_c15            = t$c15,
+          add_c16            = t$c16,
+          add_c_min          = t$c_min,
+          allow_pto          = t$allow_pto,
+          max_iso_per_person = t$max_iso,
+          extra_nogo         = found
         )
         if (is.null(res)) break
         count <- count + 1L
@@ -351,40 +353,49 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     RELAX_TIERS = list(
       list(label="Full model — all rules",
            night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL),
       list(label="Run >= 2 days (pairs allowed), APP3 required",
            night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL),
       list(label="Run >= 2 days, APP3/Roaming may be unstaffed",
            night_req=TRUE,  roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL),
+      list(label="Any run length, APP3 required (max 1 isolated shift/person)",
+           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L),
+      list(label="Any run length, APP3 required (max 2 isolated shifts/person)",
+           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L),
+      list(label="Any run length, APP3 required (max 3 isolated shifts/person)",
+           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L),
       list(label="Any run length, APP3 required",
            night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Night shift may be unstaffed",
            night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="PP cap reduced by 1",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Drop C13 (min 2 consecutive nights)",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Drop C8 (day -> night gap)",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Drop C8 + C13 / drop shift minimums",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=FALSE, c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Drop C8 + C13 + C10",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="PTO credits for staff with >4 off/vac days in PP",
            night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
+           c8=FALSE, c9=TRUE,  c10=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL),
       list(label="Hard coverage only (C1-C7, C11, C12)",
            night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c9=FALSE, c10=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE)
+           c8=FALSE, c9=FALSE, c10=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -397,11 +408,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c10          = TRUE,
       add_c13          = TRUE,
       add_c14          = TRUE,
-      add_c15          = TRUE,   # no isolated single shifts
-      add_c16          = TRUE,   # no isolated 2-day blocks of day shifts (min run 3)
-      add_c_min        = TRUE,   # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
-      allow_pto        = FALSE,  # credit off/vac days as PTO when blocked_days > 4
-      extra_nogo       = list()  # previously found x-vectors to exclude (solution enumeration)
+      add_c15          = TRUE,          # no isolated single shifts
+      add_c16          = TRUE,          # no isolated 2-day blocks of day shifts (min run 3)
+      add_c_min        = TRUE,          # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
+      allow_pto        = FALSE,         # credit off/vac days as PTO when blocked_days > 4
+      max_iso_per_person = NULL,        # NULL = unlimited; integer = max isolated single shifts per person
+      extra_nogo       = list()         # previously found x-vectors to exclude (solution enumeration)
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -444,13 +456,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       ws4off <- ws3off + nWS3
       w4idx  <- function(p, d) ws4off + (p - 1L) * (nD - 3L) + d
 
-      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4
+      # Isolation-cap auxiliaries: iso[p,d] ∈ [0,1] continuous,
+      # constrained to equal 1 when work[p,d]=1 and both neighbours=0.
+      nISO   <- if (!is.null(max_iso_per_person) && nD >= 2L) nP * nD else 0L
+      isoff  <- ws4off + nWS4
+      isoidx <- function(p, d) isoff + (p - 1L) * nD + d
+
+      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO
 
       # Variable bounds and types
       lb    <- numeric(nV)
       ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW),
-                 rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4))
-      types <- c(rep("I", nX), rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4))
+                 rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4),
+                 rep(1, nISO))
+      types <- c(rep("I", nX), rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -481,6 +500,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +0.30
       if (nWS4 > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -0.40
+      # Tiny penalty on iso variables so they stay at their natural lower bound
+      # (0 when not isolated, 1 when isolated); prevents spurious inflation.
+      if (nISO > 0L)
+        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -0.001
 
       # Constraint accumulator (triplet form → sparseMatrix)
       n_con   <- 0L
@@ -741,6 +764,35 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             }
           }
           add_con(c(widx(pi, nD), widx(pi, nD - 1L)), c(1, -1), "<=", 0L)
+        }
+      }
+
+      # ── C15b: Isolation cap — at most max_iso_per_person isolated single shifts ─
+      # iso[p,d] is forced to 1 when work[p,d]=1 and both neighbours=0.
+      #   iso[p,d] >= work[p,d] - work[p,d-1] - work[p,d+1]  (lower bound)
+      #   iso[p,d] <= work[p,d]                                (zero when not working)
+      #   Σ_d iso[p,d] <= max_iso_per_person
+      if (nISO > 0L) {
+        for (pi in seq_len(nP)) {
+          # Left boundary (d=1, no left neighbour)
+          add_con(c(isoidx(pi, 1L), widx(pi, 1L), widx(pi, 2L)),
+                  c(-1L, 1L, -1L), "<=", 0L)
+          # Interior days
+          if (nD >= 3L) {
+            for (di in 2L:(nD - 1L)) {
+              add_con(c(isoidx(pi, di), widx(pi, di - 1L), widx(pi, di), widx(pi, di + 1L)),
+                      c(-1L, -1L, 1L, -1L), "<=", 0L)
+            }
+          }
+          # Right boundary (d=nD, no right neighbour)
+          add_con(c(isoidx(pi, nD), widx(pi, nD), widx(pi, nD - 1L)),
+                  c(-1L, 1L, -1L), "<=", 0L)
+          # Upper bound: iso <= work
+          for (di in seq_len(nD))
+            add_con(c(isoidx(pi, di), widx(pi, di)), c(1L, -1L), "<=", 0L)
+          # Per-person cap
+          add_con(vapply(seq_len(nD), function(di) isoidx(pi, di), integer(1L)),
+                  rep(1L, nD), "<=", max_iso_per_person)
         }
       }
 
