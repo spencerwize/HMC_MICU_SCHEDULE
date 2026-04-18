@@ -113,17 +113,16 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Main entry point ──────────────────────────────────────────────────────
-    run = function() {
+    run = function(n_candidates = 10L) {
       if (!requireNamespace("highs", quietly = TRUE))
         stop("highs package is not installed. Run: install.packages('highs')")
 
       tiers <- private$RELAX_TIERS
       nT    <- length(tiers)
 
-      for (ti in seq_len(nT)) {
-        t <- tiers[[ti]]
-        message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
-        result <- private$build_and_solve(
+      # Helper to call build_and_solve with a tier's parameters
+      solve_tier <- function(t, extra_nogo = list()) {
+        private$build_and_solve(
           night_required   = t$night_req,
           roam_in_obj      = t$roam_obj,
           pp_cap_reduction = t$pp_red,
@@ -135,16 +134,44 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c15          = t$c15,
           add_c16          = t$c16,
           add_c_min        = t$c_min,
-          allow_pto        = t$allow_pto
+          allow_pto        = t$allow_pto,
+          extra_nogo       = extra_nogo
         )
-        if (!is.null(result)) {
-          message(sprintf("  Solution found at tier %d: %s", ti, t$label))
-          message("  Translating ILP solution to schedule...")
-          self$tier_used <- list(index = ti, label = t$label)
-          private$populate_from_solution(result)
-          message("  Done.")
-          return(invisible(self))
+      }
+
+      for (ti in seq_len(nT)) {
+        t      <- tiers[[ti]]
+        message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
+        result <- solve_tier(t)
+        if (is.null(result)) next
+
+        self$tier_used <- list(index = ti, label = t$label)
+
+        # Collect up to n_candidates distinct solutions at this tier, then pick best
+        candidates <- list(result)
+        x_found    <- list(result$sol[seq_len(result$nX)])
+
+        if (n_candidates > 1L) {
+          message(sprintf("  Collecting up to %d candidates at tier %d…", n_candidates, ti))
+          for (ci in seq_len(n_candidates - 1L)) {
+            cand <- solve_tier(t, extra_nogo = x_found)
+            if (is.null(cand)) break
+            candidates <- c(candidates, list(cand))
+            x_found    <- c(x_found, list(cand$sol[seq_len(cand$nX)]))
+          }
         }
+
+        scores   <- vapply(candidates, private$score_solution, numeric(1L))
+        best_idx <- which.max(scores)
+        message(sprintf("  %d candidate(s). Scores: [%s]  → best #%d (%.1f)",
+                        length(candidates),
+                        paste(round(scores, 1L), collapse = ", "),
+                        best_idx, scores[best_idx]))
+
+        message("  Translating ILP solution to schedule…")
+        private$populate_from_solution(candidates[[best_idx]])
+        message("  Done.")
+        return(invisible(self))
       }
 
       private$report_and_stop()
@@ -245,6 +272,73 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
   # ── Private implementation ─────────────────────────────────────────────────
   private = list(
 
+    # ── Score a candidate solution (higher = better) ──────────────────────────
+    # Works directly on the raw result list from build_and_solve — no need to
+    # populate schedule data structures.  Four criteria:
+    #   1. Target attainment  — quadratic penalty for each missed shift per PP
+    #   2. Night fairness     — penalty proportional to SD of night counts
+    #   3. Work-run quality   — reward 3/4-day blocks, penalise 1/2-day runs
+    #   4. Night-pack quality — reward 3-night packs, penalise 1/4-night runs
+    score_solution = function(res) {
+      sol       <- res$sol
+      nP        <- res$nP
+      nD        <- res$nD
+      xidx      <- res$xidx
+      dates_vec <- res$dates_vec
+      S_NIGHT   <- 4L
+      score     <- 0.0
+
+      streak_lengths <- function(v) {
+        r <- rle(as.integer(v))
+        r$lengths[r$values == 1L]
+      }
+
+      # ---- 1. Target attainment -----------------------------------------------
+      for (pi in seq_len(nP)) {
+        person <- STAFF[pi]
+        for (ppi in seq_len(nrow(PAY_PERIODS))) {
+          pp_d  <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
+          di_pp <- which(dates_vec %in% pp_d)
+          if (length(di_pp) == 0L) next
+          actual <- sum(vapply(di_pp, function(di)
+            sum(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]), integer(1L))),
+            integer(1L)))
+          sm        <- self$targets[[person]][[PAY_PERIODS$name[ppi]]]$sched_target
+          shortfall <- max(0L, sm - actual)
+          score     <- score - 10.0 * shortfall^2
+        }
+      }
+
+      # ---- 2. Night fairness --------------------------------------------------
+      nights <- vapply(seq_len(nP), function(pi)
+        sum(vapply(seq_len(nD), function(di)
+          round(sol[xidx(pi, di, S_NIGHT)]), integer(1L))),
+        integer(1L))
+      if (nP > 1L) score <- score - 5.0 * sd(nights)
+
+      # ---- 3 & 4. Run / pack quality ------------------------------------------
+      run_w   <- c("1" = -2.0, "2" = -0.5, "3" = 2.0, "4" =  1.0)
+      night_w <- c("1" = -0.5, "2" =  0.3, "3" = 1.0, "4" = -0.5)
+
+      for (pi in seq_len(nP)) {
+        # Work run quality (all slots)
+        work <- vapply(seq_len(nD), function(di)
+          as.integer(any(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]) == 1L,
+                                logical(1L)))),
+          integer(1L))
+        for (L in streak_lengths(work))
+          score <- score + run_w[min(L, 4L)]
+
+        # Night pack quality
+        nv <- vapply(seq_len(nD), function(di)
+          round(sol[xidx(pi, di, S_NIGHT)]), integer(1L))
+        for (L in streak_lengths(nv))
+          score <- score + night_w[min(L, 4L)]
+      }
+
+      score
+    },
+
     # Relaxation cascade: solver tries each tier in order, stopping at the
     # first feasible solution.  Each tier adds more flexibility than the last.
     RELAX_TIERS = list(
@@ -257,8 +351,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       list(label="Run >= 2 days, APP3/Roaming may be unstaffed",
            night_req=TRUE,  roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
            c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE),
-      list(label="Any run length, APP3 optional",
-           night_req=TRUE,  roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+      list(label="Any run length, APP3 required",
+           night_req=TRUE,  roam_obj=TRUE,  pp_red=0L, allow_pto=FALSE, c_min=TRUE,
            c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
       list(label="Night shift may be unstaffed",
            night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
