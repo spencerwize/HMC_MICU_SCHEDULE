@@ -168,8 +168,13 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                         paste(round(scores, 1L), collapse = ", "),
                         best_idx, scores[best_idx]))
 
+        best_res   <- candidates[[best_idx]]
+        candidates <- NULL
+        x_found    <- NULL
+        gc()
+
         message("  Translating ILP solution to schedule…")
-        private$populate_from_solution(candidates[[best_idx]])
+        private$populate_from_solution(best_res)
         message("  Done.")
         return(invisible(self))
       }
