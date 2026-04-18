@@ -735,12 +735,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         rhs     = con_rhs,
         types   = types,
         maximum = TRUE,
-        control = highs::highs_control(time_limit = 120)
+        control = highs::highs_control(time_limit = 60)
       )
 
       sol <- result$primal_solution
       if (is.null(sol)) {
         message(sprintf("  Solver: %s", result$status_message))
+        return(NULL)
+      }
+      # Reject LP-relaxation pseudo-solutions (returned when solver times out before
+      # finding any integer feasible point — all x values are fractional, round to 0).
+      # A valid schedule always has at least one x=1 because C2 mandates APP1 daily.
+      if (sum(round(sol[seq_len(nX)])) == 0L) {
+        message(sprintf("  Solver: %s (no integer solution found — skipping tier)",
+                        result$status_message))
         return(NULL)
       }
       message(sprintf("  Solver: %s  objective = %.1f",
