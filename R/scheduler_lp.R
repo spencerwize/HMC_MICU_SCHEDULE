@@ -82,7 +82,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     person_shifts = NULL,   # person -> data.frame(date, slot)
     pp_counts     = NULL,   # person -> named int vector (pp -> count)
     granted_pto   = NULL,   # person -> Date vector (empty for ILP path)
-    tier_used     = NULL,   # list(index, label) of relaxation tier that found a solution
 
     # ── Constructor ───────────────────────────────────────────────────────────
     initialize = function(time_off, targets) {
@@ -140,7 +139,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         if (!is.null(result)) {
           message(sprintf("  Solution found at tier %d: %s", ti, t$label))
           message("  Translating ILP solution to schedule...")
-          self$tier_used <- list(index = ti, label = t$label)
           private$populate_from_solution(result)
           message("  Done.")
           return(invisible(self))
@@ -148,38 +146,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       private$report_and_stop()
-    },
-
-    # ── Enumerate distinct feasible solutions via no-good cut iteration ───────
-    # Adds a cut excluding each previously found x-assignment, then re-solves.
-    # Returns integer count (lower bound; stops at max_count or infeasibility).
-    count_solutions = function(max_count = 20L) {
-      if (is.null(self$tier_used)) stop("Call run() before count_solutions().")
-      t     <- private$RELAX_TIERS[[self$tier_used$index]]
-      found <- list()
-      count <- 0L
-      repeat {
-        res <- private$build_and_solve(
-          night_required   = t$night_req,
-          roam_in_obj      = t$roam_obj,
-          pp_cap_reduction = t$pp_red,
-          add_c8           = t$c8,
-          add_c9           = t$c9,
-          add_c10          = t$c10,
-          add_c13          = t$c13,
-          add_c14          = t$c14,
-          add_c15          = t$c15,
-          add_c16          = t$c16,
-          add_c_min        = t$c_min,
-          allow_pto        = t$allow_pto,
-          extra_nogo       = found
-        )
-        if (is.null(res)) break
-        count <- count + 1L
-        found <- c(found, list(res$sol[seq_len(res$nX)]))
-        if (count >= max_count) break
-      }
-      count
     },
 
     # ── Export (identical to Scheduler) ───────────────────────────────────────
@@ -299,8 +265,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c15          = TRUE,   # no isolated single shifts
       add_c16          = TRUE,   # no isolated 2-day blocks of day shifts (min run 3)
       add_c_min        = TRUE,   # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
-      allow_pto        = FALSE,  # credit off/vac days as PTO when blocked_days > 4
-      extra_nogo       = list()  # previously found x-vectors to exclude (solution enumeration)
+      allow_pto        = FALSE   # credit off/vac days as PTO when blocked_days > 4
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -711,13 +676,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── Extra no-good cuts (solution enumeration) ─────────────────────────────
-      for (x_prev in extra_nogo) {
-        on_idx <- which(x_prev > 0.5)
-        if (length(on_idx) > 0L)
-          add_con(as.integer(on_idx), rep(1, length(on_idx)), "<=", length(on_idx) - 1L)
-      }
-
       # ── Assemble and solve ────────────────────────────────────────────────────
       nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4
       message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
@@ -746,7 +704,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                       result$status_message,
                       if (!is.null(result$objective_value)) result$objective_value else NA_real_))
 
-      list(sol = sol, nP = nP, nD = nD, nX = nX, xidx = xidx, dates_vec = dates_vec)
+      list(sol = sol, nP = nP, nD = nD, xidx = xidx, dates_vec = dates_vec)
     },
 
     # ── Translate binary solution vector into schedule data structures ──────────
