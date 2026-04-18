@@ -64,7 +64,7 @@ server <- function(input, output, session) {
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
       sched <- SchedulerLP$new(time_off, targets)
-      sched$run()
+      sched$run(n_candidates = as.integer(input$n_candidates))
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)

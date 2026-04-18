@@ -47,6 +47,13 @@ ui <- page_navbar(
           "Select the pay-period sheet from the Google Sheet."
         ),
         hr(),
+        numericInput("n_candidates", "Schedule candidates:",
+          value = 10L, min = 1L, max = 50L, step = 1L
+        ),
+        tags$small(class = "text-muted",
+          "Number of candidate schedules to generate and score at the winning tier."
+        ),
+        br(),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
