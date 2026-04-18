@@ -317,8 +317,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       if (nP > 1L) score <- score - 5.0 * sd(nights)
 
       # ---- 3 & 4. Run / pack quality ------------------------------------------
-      run_w   <- c("1" = -2.0, "2" = -0.5, "3" = 2.0, "4" =  1.0)
-      night_w <- c("1" = -0.5, "2" =  0.3, "3" = 1.0, "4" = -0.5)
+      # Isolated single shifts/nights are heavily penalised so the scorer
+      # strongly prefers any candidate that avoids them.
+      run_w   <- c("1" = -15.0, "2" = -0.5, "3" = 2.0, "4" =  1.0)
+      night_w <- c("1" = -12.0, "2" =  0.3, "3" = 1.0, "4" = -0.5)
 
       for (pi in seq_len(nP)) {
         # Work run quality (all slots)
