@@ -131,8 +131,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c10          = t$c10,
           add_c13          = t$c13,
           add_c14          = t$c14,
-          add_c15          = t$c15,
-          add_c16          = t$c16
+          add_c15          = t$c15
         )
         if (!is.null(result)) {
           message(sprintf("  Solution found at tier %d: %s", ti, t$label))
@@ -214,37 +213,34 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     RELAX_TIERS = list(
       list(label     = "Full model — all rules",
            night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE,  c16 = TRUE),
-      list(label     = "Drop C16 (isolated day-shift pairs allowed)",
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE),
+      list(label     = "Drop C15 (no isolated single shifts)",
            night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = TRUE,  c16 = FALSE),
-      list(label     = "Drop C15 + C16 (any run length)",
-           night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Night shift may be unstaffed",
            night_req = FALSE, roam_obj = TRUE,  pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "APP3/Roaming shift may be unstaffed",
            night_req = FALSE, roam_obj = FALSE, pp_red = 0L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "PP cap reduced by 1",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C13 (min 2 consecutive nights)",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = TRUE,  c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 (day -> night gap)",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = TRUE,  c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 + C13",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = FALSE, c9 = TRUE,  c10 = TRUE,  c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Drop C8 + C13 + C10",
            night_req = FALSE, roam_obj = FALSE, pp_red = 1L,
-           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE,  c15 = FALSE, c16 = FALSE),
+           c8 = FALSE, c9 = TRUE,  c10 = FALSE, c13 = FALSE, c14 = TRUE,  c15 = FALSE),
       list(label     = "Hard coverage only (C1-C7, C11, C12)",
            night_req = TRUE,  roam_obj = TRUE,  pp_red = 0L,
-           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE, c15 = FALSE, c16 = FALSE)
+           c8 = FALSE, c9 = FALSE, c10 = FALSE, c13 = FALSE, c14 = FALSE, c15 = FALSE)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -257,8 +253,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c10          = TRUE,
       add_c13          = TRUE,
       add_c14          = TRUE,
-      add_c15          = TRUE,   # no isolated single shifts
-      add_c16          = TRUE    # no isolated 2-day blocks of day shifts (min run 3)
+      add_c15          = TRUE   # no isolated single shifts
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -566,30 +561,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             }
           }
           add_con(c(widx(pi, nD), widx(pi, nD - 1L)), c(1, -1), "<=", 0L)
-        }
-      }
-
-      # ── C16: No isolated 2-day blocks of day shifts ──────────────────────────
-      # D(p,d) = Σ_{s∈DAY_S} x[p,d,s].  Constraint per overlapping pair:
-      # D(p,d) + D(p,d+1) ≤ 1 + D(p,d-1) + D(p,d+2)
-      # Together with C15 this enforces day-shift runs of length ≥ 3.
-      if (add_c16 && nD >= 3L) {
-        dcols <- function(pi, di) vapply(DAY_S, function(s) xidx(pi, di, s), integer(1L))
-        for (pi in seq_len(nP)) {
-          # Left boundary (d=1, no left neighbour)
-          add_con(c(dcols(pi, 1L), dcols(pi, 2L), dcols(pi, 3L)),
-                  c(rep(1, 3), rep(1, 3), rep(-1, 3)), "<=", 1)
-          # Interior
-          if (nD >= 4L) {
-            for (di in 2L:(nD - 2L)) {
-              add_con(c(dcols(pi, di), dcols(pi, di + 1L),
-                        dcols(pi, di - 1L), dcols(pi, di + 2L)),
-                      c(rep(1, 3), rep(1, 3), rep(-1, 3), rep(-1, 3)), "<=", 1)
-            }
-          }
-          # Right boundary (d=nD-1, no right neighbour)
-          add_con(c(dcols(pi, nD - 1L), dcols(pi, nD), dcols(pi, nD - 2L)),
-                  c(rep(1, 3), rep(1, 3), rep(-1, 3)), "<=", 1)
         }
       }
 
