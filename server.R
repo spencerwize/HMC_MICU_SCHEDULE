@@ -5,16 +5,16 @@
 server <- function(input, output, session) {
 
   # ── Populate sheet dropdown on startup ────────────────────────────────────
-  # Tries to refresh tab names live from the API; falls back to TIMEOFF_SHEETS
-  # so the dropdown is always usable even without API auth.
+  # Runs once; isolate() prevents googlesheets4 auth internals from creating
+  # a reactive dependency that would re-trigger this observer later.
   observe({
-    sheet_names <- tryCatch({
+    sheet_names <- isolate(tryCatch({
       gs4_auth_auto()
       googlesheets4::sheet_names(TIMEOFF_GSHEET_URL)
     }, error = function(e) {
       message("Could not fetch sheet names from API — using default list.")
       TIMEOFF_SHEETS
-    })
+    }))
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
@@ -36,8 +36,16 @@ server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
-  # ── Reactive pipeline ──────────────────────────────────────────────────────
-  pipeline <- eventReactive(input$run_btn, {
+  # ── Schedule result store ──────────────────────────────────────────────────
+  # Using reactiveVal + observeEvent (not eventReactive) so the result is only
+  # ever set by an explicit button click; it cannot be re-triggered by reactive
+  # invalidation from googlesheets4 auth internals or any other side-effect.
+  pipeline <- reactiveVal(NULL)
+
+  observeEvent(input$run_btn, {
+    shinyjs::disable("run_btn")
+    on.exit(shinyjs::enable("run_btn"), add = TRUE)
+
     # Apply sheet-specific constants before any pipeline step so that
     # SCHEDULE_START / SCHEDULE_END / PAY_PERIODS / HOLIDAYS reflect the
     # currently selected sheet rather than the April–July defaults.
@@ -77,7 +85,7 @@ server <- function(input, output, session) {
         selected = STAFF[1]
       )
 
-      list(
+      pipeline(list(
         sched      = sched,
         time_off   = time_off,
         targets    = targets,
@@ -85,7 +93,7 @@ server <- function(input, output, session) {
         tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
         grid       = sched$to_person_grid(time_off, targets)
-      )
+      ))
     })
   })
 
