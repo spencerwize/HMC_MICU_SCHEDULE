@@ -301,8 +301,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           di_pp <- which(dates_vec %in% pp_d)
           if (length(di_pp) == 0L) next
           actual <- sum(vapply(di_pp, function(di)
-            sum(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]), integer(1L))),
-            integer(1L)))
+            sum(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]), numeric(1L))),
+            numeric(1L)))
           sm        <- self$targets[[person]][[PAY_PERIODS$name[ppi]]]$sched_target
           shortfall <- max(0L, sm - actual)
           score     <- score - 10.0 * shortfall^2
@@ -312,8 +312,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # ---- 2. Night fairness --------------------------------------------------
       nights <- vapply(seq_len(nP), function(pi)
         sum(vapply(seq_len(nD), function(di)
-          round(sol[xidx(pi, di, S_NIGHT)]), integer(1L))),
-        integer(1L))
+          round(sol[xidx(pi, di, S_NIGHT)]), numeric(1L))),
+        numeric(1L))
       if (nP > 1L) score <- score - 5.0 * sd(nights)
 
       # ---- 3 & 4. Run / pack quality ------------------------------------------
@@ -331,7 +331,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
         # Night pack quality
         nv <- vapply(seq_len(nD), function(di)
-          round(sol[xidx(pi, di, S_NIGHT)]), integer(1L))
+          as.integer(round(sol[xidx(pi, di, S_NIGHT)])), integer(1L))
         for (L in streak_lengths(nv))
           score <- score + night_w[min(L, 4L)]
       }
