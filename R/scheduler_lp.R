@@ -263,16 +263,16 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       list(label="APP3/Roaming shift may be unstaffed",
            night_req=FALSE, roam_obj=FALSE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
            c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="PP cap reduced by 1 / drop Todd minimum",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+      list(label="PP cap reduced by 1",
+           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
            c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
       list(label="Drop C13 (min 2 consecutive nights)",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
            c8=TRUE,  c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
       list(label="Drop C8 (day -> night gap)",
-           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+           night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
            c8=FALSE, c9=TRUE,  c10=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE),
-      list(label="Drop C8 + C13",
+      list(label="Drop C8 + C13 / drop shift minimums",
            night_req=FALSE, roam_obj=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
            c8=FALSE, c9=TRUE,  c10=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE),
       list(label="Drop C8 + C13 + C10",
@@ -489,13 +489,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C_min: Minimum shifts for flex-target staff (soft_min per PP) ──────────
-      # Currently only Todd has FLEX_TARGETS (soft_min=4 < sched_target=6).
+      # ── C_min: Minimum shifts per PP for all staff ──────────────────────────────
+      # Enforces Σ x[p,PP] ≥ soft_min for every person.
+      # Non-FLEX staff: soft_min = sched_target (must hit full target).
+      # FLEX_TARGETS (e.g. Todd): soft_min = FLEX_TARGETS value (e.g. 4).
       # Skipped when person has fewer available days than their soft_min.
       if (add_c_min) {
         for (pi in seq_len(nP)) {
           person <- STAFF[pi]
-          if (is.null(FLEX_TARGETS[[person]])) next
           for (ppi in seq_len(nrow(PAY_PERIODS))) {
             pp_name <- PAY_PERIODS$name[ppi]
             pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
