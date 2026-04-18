@@ -38,29 +38,16 @@ validate_schedule <- function(sched_obj, time_off, targets) {
   for (person in STAFF) {
     nights <- sort(sched_obj$person_nights[[person]])
 
-    # ── 3 & 4. Night recovery ─────────────────────────────────────────────
+    # ── 3. Night → no day shift next morning ─────────────────────────────────
     for (nd in nights) {
-      nd <- as_date(nd)
-      for (offset in 1:2) {
-        check_d <- nd + offset
-        if (!check_d %in% dates) next
-        for (s in DAY_SLOTS) {
-          v <- get(check_d, s)
-          if (!is.na(v) && v == person) {
-            errors <- c(errors, sprintf(
-              "%s: day shift on %s within %d day(s) of night on %s",
-              person, as.character(check_d), offset, as.character(nd)))
-          }
-        }
-      }
-      # Constraint 3: no day shift the morning after (d+1)
+      nd     <- as_date(nd)
       next_d <- nd + 1L
       if (next_d %in% dates) {
         for (s in DAY_SLOTS) {
           v <- get(next_d, s)
           if (!is.na(v) && v == person) {
             errors <- c(errors, sprintf(
-              "%s: day shift on %s after night on %s (constraint 3)",
+              "%s: day shift on %s after night on %s",
               person, as.character(next_d), as.character(nd)))
           }
         }
