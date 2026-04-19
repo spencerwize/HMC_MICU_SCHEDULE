@@ -651,8 +651,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
             di_pp   <- which(dates_vec %in% pp_d)
             t_info  <- self$targets[[person]][[pp_name]]
-            sm      <- t_info$soft_min
-            if (sm <= 0L || length(di_pp) == 0L || t_info$avail < sm) next
+            sm      <- min(t_info$soft_min, t_info$avail)
+            if (sm <= 0L || length(di_pp) == 0L) next
             cols <- as.integer(unlist(lapply(di_pp, function(di)
               vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
             add_con(cols, rep(1, length(cols)), ">=", sm)
