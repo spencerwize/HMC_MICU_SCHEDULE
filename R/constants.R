@@ -57,7 +57,7 @@ FLEX_TARGETS <- list(
 
 # Default soft minimum shifts per PP for anyone not listed in FLEX_TARGETS.
 # Scheduler will try to reach sched_target (6) but only hard-enforces this floor.
-DEFAULT_SOFT_MIN <- 5L
+DEFAULT_SOFT_MIN <- 4L
 
 # Per-person base shift target overrides (default 6 for everyone not listed).
 # Value can be a single integer (applies to all PPs) or a named list of
