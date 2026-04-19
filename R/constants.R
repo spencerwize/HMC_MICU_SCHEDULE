@@ -55,6 +55,9 @@ FLEX_TARGETS <- list(
   Todd = 4L
 )
 
+# ILP solver wall-clock budget per candidate (seconds).
+SOLVER_TIME_LIMIT <- 300L
+
 # Default soft minimum shifts per PP for anyone not listed in FLEX_TARGETS.
 # Scheduler will try to reach sched_target (6) but only hard-enforces this floor.
 DEFAULT_SOFT_MIN <- 5L

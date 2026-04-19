@@ -944,7 +944,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         rhs     = con_rhs,
         types   = types,
         maximum = TRUE,
-        control = highs::highs_control(time_limit = 120)
+        control = highs::highs_control(time_limit = SOLVER_TIME_LIMIT)
       )
 
       sol <- result$primal_solution
@@ -1074,7 +1074,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       message("\n  ─── ILP SCHEDULING DIAGNOSTICS ────────────────────────────")
       if (length(issues) == 0L) {
         message("  No obvious availability or target issues detected.")
-        message("  The model may simply be too complex for the 2-minute time budget.")
+        message(sprintf("  The model may simply be too complex for the %d-second time budget.", SOLVER_TIME_LIMIT))
         message("  Consider reducing MAX_NIGHTS_TOTAL, loosening PP targets, or")
         message("  removing time-off entries that conflict with coverage requirements.")
       } else {
