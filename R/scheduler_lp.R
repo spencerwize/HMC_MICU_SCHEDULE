@@ -490,7 +490,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW),
                  rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4),
                  rep(1, nISO), rep(1, nSRS))
-      types <- c(rep("I", nX), rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS))
+      types <- c(rep("I", nX),
+                 rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
+                 rep("I", nISO),
+                 rep("I", nSRS))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -944,7 +947,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         rhs     = con_rhs,
         types   = types,
         maximum = TRUE,
-        control = highs::highs_control(time_limit = 60)
+        control = highs::highs_control(time_limit = 120)
       )
 
       sol <- result$primal_solution
