@@ -37,9 +37,17 @@ compute_targets <- function(time_off) {
           # the 6-shift target.  Only hard-OFF days and CME days affect the target.
           # If a person can't reach 6 due to too many VAC days, cleanup_pass will
           # grant PTO credits to cover the shortfall.
+          bt <- BASE_TARGETS[[person]]
+          base_target <- if (is.null(bt)) {
+            6L
+          } else if (is.list(bt)) {
+            if (!is.null(bt[[pp_name]])) as.integer(bt[[pp_name]]) else 6L
+          } else {
+            as.integer(bt)
+          }
           avail_for_target <- sum(!p_dates %in% unique(c(off_days, cme_days)))
-          base   <- min(6L, avail_for_target + credited)
-          target <- if (avail_for_target >= 6L) 6L else base
+          base   <- min(base_target, avail_for_target + credited)
+          target <- if (avail_for_target >= base_target) base_target else base
           sched_target <- max(0L, target - credited)
 
           # soft_min: scheduling urgency drops once this floor is reached.
