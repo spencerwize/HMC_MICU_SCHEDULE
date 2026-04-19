@@ -54,10 +54,13 @@ compute_targets <- function(time_off) {
           # The person can still receive up to sched_target shifts; they are
           # simply deprioritised relative to people below their own soft_min.
           flex_floor <- FLEX_TARGETS[[person]]
-          soft_min   <- if (!is.null(flex_floor))
+          soft_min   <- if (!is.null(flex_floor)) {
                           max(0L, min(as.integer(flex_floor), sched_target))
-                        else
-                          max(0L, min(DEFAULT_SOFT_MIN, sched_target))
+                        } else {
+                          heavy_off <- (length(off_days) + length(vac_days)) >= 5L
+                          floor_val <- if (heavy_off) 4L else DEFAULT_SOFT_MIN
+                          max(0L, min(floor_val, sched_target))
+                        }
 
           list(
             pp_name      = pp_name,
