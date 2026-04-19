@@ -56,7 +56,8 @@ compute_targets <- function(time_off) {
           flex_floor <- FLEX_TARGETS[[person]]
           soft_min   <- if (!is.null(flex_floor))
                           max(0L, min(as.integer(flex_floor), sched_target))
-                        else sched_target
+                        else
+                          max(0L, min(DEFAULT_SOFT_MIN, sched_target))
 
           list(
             pp_name      = pp_name,
