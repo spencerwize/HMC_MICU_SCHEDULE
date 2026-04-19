@@ -99,3 +99,29 @@ targets_summary_df <- function(targets) {
   })
   do.call(rbind, unlist(rows, recursive = FALSE))
 }
+
+#' Per-PP staffing balance: slot capacity vs shift demand vs available person-days
+staffing_balance_df <- function(targets) {
+  do.call(rbind, lapply(seq_len(nrow(PAY_PERIODS)), function(i) {
+    pp_name  <- PAY_PERIODS$name[i]
+    pp_start <- PAY_PERIODS$start[i]
+    pp_end   <- PAY_PERIODS$end[i]
+    n_days   <- as.integer(pp_end - pp_start + 1L)
+    capacity <- n_days * 4L
+
+    demand     <- sum(vapply(STAFF, function(p) targets[[p]][[pp_name]]$sched_target, integer(1L)))
+    staff_days <- sum(vapply(STAFF, function(p) targets[[p]][[pp_name]]$avail,        integer(1L)))
+    slack      <- staff_days - demand
+
+    data.frame(
+      PP         = pp_name,
+      Days       = n_days,
+      Capacity   = capacity,
+      Demand     = demand,
+      Staff_Days = staff_days,
+      Slack      = slack,
+      Status     = if (slack < 0L) "IMPOSSIBLE" else if (slack <= 5L) "TIGHT" else "OK",
+      stringsAsFactors = FALSE
+    )
+  }))
+}

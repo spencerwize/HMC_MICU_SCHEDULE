@@ -82,6 +82,21 @@ ui <- page_navbar(
             tags$li("Fixed holiday assignments pre-seeded")
           ),
           hr(),
+          conditionalPanel(
+            "output.schedule_ready",
+            card(
+              card_header("Staffing Balance by Pay Period"),
+              card_body(
+                p(class = "text-muted small",
+                  strong("Demand"), " = total shifts to schedule (Σ per-person targets).  ",
+                  strong("Avail Days"), " = total person-days staff can work (upper bound on assignable shifts).  ",
+                  strong("Slack"), " = Avail Days − Demand.  Negative slack means the pay period is mathematically impossible."
+                ),
+                reactableOutput("balance_table")
+              )
+            ),
+            br()
+          ),
           fluidRow(
             column(3,
               card(class = "text-center",
