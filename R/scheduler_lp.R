@@ -1099,8 +1099,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # ── Phase 2: greedy APP3 fill-in for under-scheduled staff ─────────────────
     # Runs after the ILP solution is committed.  Assigns empty Roaming slots to
     # people who are below their sched_target for that PP.  All hard constraints
-    # (availability, no double-booking, C7 night→day ban, PP cap) are respected;
-    # run-length rules (C8/C15/C16) are intentionally not applied here.
+    # (availability, no double-booking, C7 night→day ban, C10 max-4-consec, PP
+    # cap) are respected; run-length isolation rules (C8/C15/C16) are relaxed.
     fill_roaming_pass = function() {
       dates_vec <- sort(as.Date(names(self$schedule)))
 
@@ -1119,6 +1119,21 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         ps <- as.character(d - 1L)
         ps %in% names(self$schedule) &&
           isTRUE(self$schedule[[ps]]$Night == person)
+      }
+
+      # C10: adding d would create a run of 5+ consecutive work days
+      would_exceed_consec <- function(person, d, max_consec = 4L) {
+        work_set <- c(
+          self$person_shifts[[person]]$date,
+          self$person_nights[[person]]
+        )
+        # Walk backward then forward to measure the run that would include d
+        run <- 1L
+        k   <- 1L
+        while ((d - k) %in% work_set) { run <- run + 1L; k <- k + 1L }
+        k <- 1L
+        while ((d + k) %in% work_set) { run <- run + 1L; k <- k + 1L }
+        run > max_consec
       }
 
       n_filled <- 0L
@@ -1142,6 +1157,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (is_blocked_p(person, d)) next
           if (is_working_p(person, d)) next
           if (had_night_prev(person, d)) next
+          if (would_exceed_consec(person, d)) next
           candidates <- c(candidates, person)
           deficits   <- c(deficits, deficit)
         }
