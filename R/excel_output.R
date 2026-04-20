@@ -113,6 +113,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     any(vapply(dbn_set, function(x) x$date == d && x$person == person, logical(1L)))
 
   N_STAFF <- length(STAFF)
+  N_HDR   <- 7L
   N_PP    <- nrow(PAY_PERIODS)
 
   # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
