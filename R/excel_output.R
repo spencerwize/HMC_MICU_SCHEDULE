@@ -68,7 +68,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
     if (!is.na(typ)) {
-      return(switch(typ, cme = "CME", off = "OFF", vac = "VAC", ""))
+      return(switch(typ, cme = "CME", off = "OFF", vac = "OFF", ""))
     }
     ""
   }
@@ -79,7 +79,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      VAC  = C_PEACH,
       CME  = C_ORANGE, OFF = C_PINK,
       NULL)
   }
@@ -88,7 +87,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      VAC = F_BROWN,
       CME = F_WHITE, OFF = F_RED,
       "#000000")
   }
@@ -331,7 +329,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
     x = paste0("APP1 / APP2 / APP 3 = day shift  \u00B7  Night = night shift  ",
-               "\u00B7  VAC = vacation  \u00B7  CME = conference  \u00B7  OFF = not scheduled"),
+               "\u00B7  CME = conference  \u00B7  OFF = vacation / day off"),
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),

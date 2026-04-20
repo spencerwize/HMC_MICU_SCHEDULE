@@ -280,7 +280,7 @@ server <- function(input, output, session) {
             role <- switch(typ,
               cme = "CME",
               off = "OFF",
-              vac = "VAC",
+              vac = "OFF",
               ""
             )
           }
@@ -292,7 +292,6 @@ server <- function(input, output, session) {
           APP2    = if (is_hol) "#FFFF99" else "#92D050",
           "APP 3" = if (is_hol) "#FFFF99" else "#92D050",
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
-          VAC     = "#FFD966",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
@@ -362,8 +361,8 @@ server <- function(input, output, session) {
     role_colors <- c(
       APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
       Night   = "#BDD7EE",
-      VAC     = "#FFD966", CME  = "#FF6D01",
-      OFF     = "#FFC7CE"
+      CME  = "#FF6D01",
+      OFF  = "#FFC7CE"
     )
 
     wide <- grid %>%

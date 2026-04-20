@@ -723,8 +723,7 @@ Scheduler <- R6::R6Class("Scheduler",
             m     <- pdata[pdata$date == d, ]
             typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
             if (!is.na(typ)) {
-              role <- if (typ == "cme") "CME" else
-                      if (typ == "off") "OFF" else "VAC"
+              role <- if (typ == "cme") "CME" else "OFF"
             }
           }
           is_hol <- d %in% HOLIDAY_DATES

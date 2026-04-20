@@ -261,7 +261,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             m     <- pdata[pdata$date == d, ]
             if (nrow(m) > 0)
               role <- switch(m$type[1],
-                cme = "CME", off = "OFF", vac = "VAC", NA_character_)
+                cme = "CME", off = "OFF", vac = "OFF", NA_character_)
           }
           data.frame(
             date       = d,
