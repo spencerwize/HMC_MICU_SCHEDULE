@@ -52,6 +52,7 @@
 #   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
+#   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 6  per person per calendar month
 #   C12   Holiday pre-seed:   lb = ub = 1 for pre-assigned (p,d,s)
 #   C13   Min 2 consec Nts:   isolated night shifts forbidden
 #   C14   Fairness bounds:    Σ x ≤ max_M,  Σ x ≥ min_M  per person per metric
@@ -852,6 +853,17 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       for (pi in seq_len(nP)) {
         cols <- vapply(seq_len(nD), function(di) xidx(pi, di, S_NIGHT), integer(1L))
         add_con(cols, rep(1, nD), "<=", MAX_NIGHTS_TOTAL)
+      }
+
+      # ── C11b: Max 6 nights per person per calendar month ─────────────────────
+      months_in_sched <- unique(format(dates_vec, "%Y-%m"))
+      for (pi in seq_len(nP)) {
+        for (mo in months_in_sched) {
+          mo_idx <- which(format(dates_vec, "%Y-%m") == mo)
+          if (length(mo_idx) == 0L) next
+          cols <- vapply(mo_idx, function(di) xidx(pi, di, S_NIGHT), integer(1L))
+          add_con(cols, rep(1L, length(cols)), "<=", 6L)
+        }
       }
 
       # ── C12: Holiday pre-seeds — fix x[p,d,s] = 1 ────────────────────────────
