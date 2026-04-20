@@ -114,7 +114,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Main entry point ──────────────────────────────────────────────────────
-    run = function(n_candidates = 10L) {
+    run = function(n_candidates = N_CANDIDATES) {
       if (!requireNamespace("highs", quietly = TRUE))
         stop("highs package is not installed. Run: install.packages('highs')")
 
@@ -1069,7 +1069,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         rhs     = con_rhs,
         types   = types,
         maximum = TRUE,
-        control = highs::highs_control(time_limit = SOLVER_TIME_LIMIT)
+        control = highs::highs_control(time_limit  = SOLVER_TIME_LIMIT,
+                                       mip_rel_gap = SOLVER_MIP_GAP)
       )
 
       sol <- result$primal_solution

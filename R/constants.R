@@ -56,7 +56,11 @@ FLEX_TARGETS <- list(
 )
 
 # ILP solver wall-clock budget per candidate (seconds).
-SOLVER_TIME_LIMIT <- 300L
+SOLVER_TIME_LIMIT <- 120L
+# Stop early when best integer solution is within this fraction of the LP bound.
+SOLVER_MIP_GAP   <- 0.02
+# Candidates to collect per tier before picking the best-scored one.
+N_CANDIDATES     <- 5L
 
 # Default soft minimum shifts per PP for anyone not listed in FLEX_TARGETS.
 # Scheduler will try to reach sched_target (6) but only hard-enforces this floor.
