@@ -1102,6 +1102,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # (availability, no double-booking, C7 night→day ban, C10 max-4-consec, PP
     # cap) are respected; run-length isolation rules (C8/C15/C16) are relaxed.
     fill_roaming_pass = function() {
+      # Use explicit index iteration to guarantee Date class is preserved on each d
       dates_vec <- sort(as.Date(names(self$schedule)))
 
       is_blocked_p <- function(person, d) {
@@ -1111,37 +1112,43 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       is_working_p <- function(person, d) {
-        day <- self$schedule[[as.character(d)]]
-        person %in% c(day$APP1, day$APP2, day$Night, day$Roaming)
+        day <- self$schedule[[format(d, "%Y-%m-%d")]]
+        if (is.null(day)) return(FALSE)
+        isTRUE(person %in% c(day$APP1, day$APP2, day$Night, day$Roaming))
       }
 
       had_night_prev <- function(person, d) {
-        ps <- as.character(d - 1L)
-        ps %in% names(self$schedule) &&
+        ps <- format(d - 1L, "%Y-%m-%d")
+        isTRUE(ps %in% names(self$schedule)) &&
           isTRUE(self$schedule[[ps]]$Night == person)
       }
 
       # C10: adding d would create a run of 5+ consecutive work days
       would_exceed_consec <- function(person, d, max_consec = 4L) {
-        work_set <- c(
+        work_set <- as.Date(c(
           self$person_shifts[[person]]$date,
           self$person_nights[[person]]
-        )
-        # Walk backward then forward to measure the run that would include d
+        ))
+        if (length(work_set) == 0L) return(FALSE)
         run <- 1L
         k   <- 1L
-        while ((d - k) %in% work_set) { run <- run + 1L; k <- k + 1L }
+        while (k <= max_consec && isTRUE((d - k) %in% work_set)) {
+          run <- run + 1L; k <- k + 1L
+        }
         k <- 1L
-        while ((d + k) %in% work_set) { run <- run + 1L; k <- k + 1L }
+        while (k <= max_consec && isTRUE((d + k) %in% work_set)) {
+          run <- run + 1L; k <- k + 1L
+        }
         run > max_consec
       }
 
       n_filled <- 0L
 
-      for (d in dates_vec) {
-        ds  <- as.character(d)
+      for (di in seq_along(dates_vec)) {
+        d   <- dates_vec[di]   # [i] preserves Date class
+        ds  <- format(d, "%Y-%m-%d")
         day <- self$schedule[[ds]]
-        if (!is.na(day$Roaming)) next
+        if (is.null(day) || !is.na(day$Roaming)) next
 
         pp <- get_pp(d)
         if (is.na(pp)) next
@@ -1153,7 +1160,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           tgt <- self$targets[[person]][[pp]]
           if (is.null(tgt)) next
           deficit <- tgt$sched_target - self$pp_counts[[person]][[pp]]
-          if (deficit <= 0L) next
+          if (!isTRUE(deficit > 0L)) next
           if (is_blocked_p(person, d)) next
           if (is_working_p(person, d)) next
           if (had_night_prev(person, d)) next
