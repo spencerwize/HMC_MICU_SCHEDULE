@@ -72,6 +72,9 @@ server <- function(input, output, session) {
       balance <- staffing_balance_df(targets)
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
+      # Apply UI solver settings for this run
+      SOLVER_TIME_LIMIT <<- as.integer(input$solver_time_limit)
+      SOLVER_MIP_GAP    <<- as.numeric(input$solver_mip_gap)
       sched <- SchedulerLP$new(time_off, targets)
       sched$run(n_candidates = as.integer(input$n_candidates))
 
