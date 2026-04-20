@@ -668,8 +668,10 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     # APP1 / APP2 / APP3 slot cols (4-6)
     day_vals <- c(app1, app2, roam)
     for (j in 1:3) {
-      val <- day_vals[j]
-      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else bg_day
+      val     <- day_vals[j]
+      is_app3 <- j == 3L
+      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else
+             if (is_app3) C_PEACH else bg_day
       cfc <- if (nchar(val) > 0) F_BLUE else F_GRAY
       addStyle(wb, "Schedule",
         mk(fg = cbg, bold = nchar(val) > 0, font_color = cfc,
@@ -718,7 +720,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
   setColWidths(wb, "Schedule",
     cols   = seq_len(N_COLS),
-    widths = c(11, 5, 5, 13, 9, 13, 13, rep(9, N_STAFF), 18))
+    widths = c(14, 7, 7, 16, 14, 16, 16, rep(13, N_STAFF), 20))
 
   # ── Save ───────────────────────────────────────────────────────────────────
   saveWorkbook(wb, output_path, overwrite = TRUE)
