@@ -350,7 +350,123 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           score <- score + night_w[min(L, 4L)]
       }
 
+      # ---- 5. APP3 fill potential -----------------------------------------------
+      # Simulate greedy Phase 2 fill and reward solutions that enable more fills.
+      score <- score + 4.0 * private$simulate_roaming_fill(res)
+
       score
+    },
+
+    # ── Simulate Phase 2 greedy APP3 fill (for candidate scoring) ─────────────
+    # Mirrors fill_roaming_pass logic but operates on the raw ILP result without
+    # touching self$schedule.  Returns the number of APP3 slots that would be
+    # filled, used as a score criterion to select among candidates.
+    simulate_roaming_fill = function(res) {
+      sol       <- res$sol
+      nP        <- res$nP
+      nD        <- res$nD
+      xidx      <- res$xidx
+      dates_vec <- res$dates_vec
+      S_NIGHT   <- 4L
+
+      # working[pi, di] = TRUE if person pi works on day di in this solution
+      working <- matrix(FALSE, nP, nD)
+      for (pi in seq_len(nP))
+        for (di in seq_len(nD))
+          for (s in 1:4)
+            if (isTRUE(round(sol[xidx(pi, di, s)]) == 1L)) {
+              working[pi, di] <- TRUE; break
+            }
+
+      # app3_taken[di] = TRUE if Roaming slot already filled by ILP
+      app3_taken <- logical(nD)
+      for (di in seq_len(nD))
+        for (pi in seq_len(nP))
+          if (isTRUE(round(sol[xidx(pi, di, 3L)]) == 1L)) {
+            app3_taken[di] <- TRUE; break
+          }
+
+      # Build pp_counts from ILP solution
+      pp_counts <- setNames(
+        lapply(STAFF, function(p) setNames(integer(nrow(PAY_PERIODS)), PAY_PERIODS$name)),
+        STAFF)
+      for (pi in seq_len(nP)) {
+        person <- STAFF[pi]
+        for (di in seq_len(nD)) {
+          if (!working[pi, di]) next
+          pp <- get_pp(dates_vec[di])
+          if (!is.na(pp))
+            pp_counts[[person]][[pp]] <- pp_counts[[person]][[pp]] + 1L
+        }
+      }
+
+      # Precompute fairness stats (nights + weekend shifts) per person
+      nights_ct  <- vapply(seq_len(nP), function(pi)
+        sum(vapply(seq_len(nD), function(di)
+          as.integer(isTRUE(round(sol[xidx(pi, di, S_NIGHT)]) == 1L)), integer(1L))),
+        integer(1L))
+      weekend_ct <- vapply(seq_len(nP), function(pi)
+        sum(vapply(seq_len(nD), function(di)
+          as.integer(working[pi, di] &&
+            weekdays(dates_vec[di]) %in% c("Saturday", "Sunday")),
+          integer(1L))),
+        integer(1L))
+
+      n_filled <- 0L
+
+      for (di in seq_len(nD)) {
+        if (app3_taken[di]) next
+        d  <- dates_vec[di]
+        pp <- get_pp(d)
+        if (is.na(pp)) next
+
+        candidates <- integer(0)
+        scores_c   <- numeric(0)
+
+        for (pi in seq_len(nP)) {
+          person <- STAFF[pi]
+          tgt    <- self$targets[[person]][[pp]]
+          if (is.null(tgt)) next
+          deficit <- tgt$sched_target - pp_counts[[person]][[pp]]
+          if (deficit <= 0L) next
+
+          # Availability
+          pdata <- self$time_off[[person]]
+          if (nrow(pdata) > 0 &&
+              any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))) next
+
+          # Not already working this day
+          if (working[pi, di]) next
+
+          # C7: no day shift after a night
+          if (di > 1L && isTRUE(round(sol[xidx(pi, di - 1L, S_NIGHT)]) == 1L)) next
+
+          # C10: consecutive days
+          run <- 1L; k <- 1L
+          while (k <= 4L && (di - k) >= 1L && working[pi, di - k]) {
+            run <- run + 1L; k <- k + 1L
+          }
+          k <- 1L
+          while (k <= 4L && (di + k) <= nD && working[pi, di + k]) {
+            run <- run + 1L; k <- k + 1L
+          }
+          if (run > 4L) next
+
+          cand_score <- deficit * 100L + nights_ct[pi] * 10L + weekend_ct[pi]
+          candidates <- c(candidates, pi)
+          scores_c   <- c(scores_c, cand_score)
+        }
+
+        if (length(candidates) == 0L) next
+
+        best_pi             <- candidates[which.max(scores_c)]
+        app3_taken[di]      <- TRUE
+        working[best_pi, di] <- TRUE
+        pp_counts[[STAFF[best_pi]]][[pp]] <- pp_counts[[STAFF[best_pi]]][[pp]] + 1L
+        n_filled            <- n_filled + 1L
+      }
+
+      n_filled
     },
 
     # Relaxation cascade: solver tries each tier in order, stopping at the
