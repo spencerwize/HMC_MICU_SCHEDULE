@@ -5,16 +5,16 @@
 server <- function(input, output, session) {
 
   # ── Populate sheet dropdown on startup ────────────────────────────────────
-  # Tries to refresh tab names live from the API; falls back to TIMEOFF_SHEETS
-  # so the dropdown is always usable even without API auth.
+  # Runs once; isolate() prevents googlesheets4 auth internals from creating
+  # a reactive dependency that would re-trigger this observer later.
   observe({
-    sheet_names <- tryCatch({
+    sheet_names <- isolate(tryCatch({
       gs4_auth_auto()
       googlesheets4::sheet_names(TIMEOFF_GSHEET_URL)
     }, error = function(e) {
       message("Could not fetch sheet names from API — using default list.")
       TIMEOFF_SHEETS
-    })
+    }))
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
@@ -36,8 +36,16 @@ server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
-  # ── Reactive pipeline ──────────────────────────────────────────────────────
-  pipeline <- eventReactive(input$run_btn, {
+  # ── Schedule result store ──────────────────────────────────────────────────
+  # Using reactiveVal + observeEvent (not eventReactive) so the result is only
+  # ever set by an explicit button click; it cannot be re-triggered by reactive
+  # invalidation from googlesheets4 auth internals or any other side-effect.
+  pipeline <- reactiveVal(NULL)
+
+  observeEvent(input$run_btn, {
+    shinyjs::disable("run_btn")
+    on.exit(shinyjs::enable("run_btn"), add = TRUE)
+
     # Apply sheet-specific constants before any pipeline step so that
     # SCHEDULE_START / SCHEDULE_END / PAY_PERIODS / HOLIDAYS reflect the
     # currently selected sheet rather than the April–July defaults.
@@ -61,10 +69,11 @@ server <- function(input, output, session) {
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)
+      balance <- staffing_balance_df(targets)
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
       sched <- SchedulerLP$new(time_off, targets)
-      sched$run()
+      sched$run(n_candidates = as.integer(input$n_candidates))
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
@@ -77,14 +86,16 @@ server <- function(input, output, session) {
         selected = STAFF[1]
       )
 
-      list(
+      pipeline(list(
         sched      = sched,
         time_off   = time_off,
         targets    = targets,
+        balance    = balance,
         validation = validation,
+        tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
         grid       = sched$to_person_grid(time_off, targets)
-      )
+      ))
     })
   })
 
@@ -126,6 +137,50 @@ server <- function(input, output, session) {
   output$stat_errors <- renderText({
     req(pipeline())
     as.character(length(pipeline()$validation$errors))
+  })
+
+  output$stat_tier <- renderUI({
+    req(pipeline())
+    tu  <- pipeline()$tier_used
+    idx <- if (is.null(tu)) NA_integer_ else tu$index
+    lbl <- if (is.null(tu)) "—" else sprintf("%d / 18", idx)
+    cls <- if (is.na(idx))    "text-secondary"
+           else if (idx <= 2) "text-success"
+           else if (idx <= 5) "text-warning"
+           else               "text-danger"
+    tagList(
+      h2(lbl, class = paste(cls, "mb-0")),
+      if (!is.null(tu))
+        tags$small(class = "text-muted", tu$label)
+    )
+  })
+
+  output$balance_table <- renderReactable({
+    req(pipeline())
+    df <- pipeline()$balance
+    status_colors <- c(IMPOSSIBLE = "#FFC7CE", TIGHT = "#FFD966", OK = "#92D050")
+    reactable(
+      df,
+      columns = list(
+        PP         = colDef(name = "Pay Period", minWidth = 85),
+        Days       = colDef(name = "Days",       minWidth = 55, align = "center"),
+        Capacity   = colDef(name = "Slots",      minWidth = 60, align = "center"),
+        Demand     = colDef(name = "Demand",     minWidth = 70, align = "center"),
+        Staff_Days = colDef(name = "Avail Days", minWidth = 85, align = "center"),
+        Slack      = colDef(name = "Slack",      minWidth = 65, align = "center"),
+        Status     = colDef(name = "Status",     minWidth = 100, align = "center",
+          cell = function(value) {
+            bg <- status_colors[[value]]
+            tags$span(
+              style = sprintf("background:%s;padding:2px 10px;border-radius:3px;font-weight:600;", bg),
+              value
+            )
+          }
+        )
+      ),
+      striped = TRUE, highlight = TRUE, bordered = TRUE,
+      defaultPageSize = nrow(df), pagination = FALSE, compact = TRUE
+    )
   })
 
   output$validation_ui <- renderUI({
@@ -225,7 +280,7 @@ server <- function(input, output, session) {
             role <- switch(typ,
               cme = "CME",
               off = "OFF",
-              vac = "VAC",
+              vac = "OFF",
               ""
             )
           }
@@ -237,7 +292,6 @@ server <- function(input, output, session) {
           APP2    = if (is_hol) "#FFFF99" else "#92D050",
           "APP 3" = if (is_hol) "#FFFF99" else "#92D050",
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
-          VAC     = "#FFD966",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
@@ -307,8 +361,8 @@ server <- function(input, output, session) {
     role_colors <- c(
       APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
       Night   = "#BDD7EE",
-      VAC     = "#FFD966", CME  = "#FF6D01",
-      OFF     = "#FFC7CE"
+      CME  = "#FF6D01",
+      OFF  = "#FFC7CE"
     )
 
     wide <- grid %>%
@@ -319,6 +373,13 @@ server <- function(input, output, session) {
         values_from = role
       ) %>%
       arrange(date)
+
+    # Flag days where no one is assigned to APP 3
+    staff_present <- STAFF[STAFF %in% names(wide)]
+    wide$app3_open <- apply(
+      wide[, staff_present, drop = FALSE], 1,
+      function(row) !any(row == "APP 3", na.rm = TRUE)
+    )
 
     # Make cell colour helper
     make_col <- function(person_name) {
@@ -341,6 +402,18 @@ server <- function(input, output, session) {
 
     person_cols <- setNames(lapply(STAFF, make_col), STAFF)
 
+    app3_col <- colDef(
+      name  = "APP3",
+      width = 46,
+      style = function(value) {
+        if (isTRUE(value))
+          list(background = "#FCE4D6", textAlign = "center")
+        else
+          list(background = "#E2EFDA", textAlign = "center")
+      },
+      cell = function(value) if (isTRUE(value)) "\u2205" else "\u2713"
+    )
+
     date_col <- colDef(
       name = "Date",
       width = 90,
@@ -352,9 +425,10 @@ server <- function(input, output, session) {
       wide,
       columns = c(
         list(
-          date     = date_col,
-          day_name = colDef(name = "Day", width = 40),
-          pp       = colDef(name = "PP",  width = 45),
+          date      = date_col,
+          day_name  = colDef(name = "Day",  width = 40),
+          pp        = colDef(name = "PP",   width = 45),
+          app3_open = app3_col,
           is_holiday = colDef(show = FALSE),
           is_weekend = colDef(show = FALSE)
         ),
@@ -472,6 +546,7 @@ server <- function(input, output, session) {
 
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
+        actual < soft_min     ~ "Below minimum",
         actual < sched_target ~ "Under",
         actual > sched_target ~ "Over",
         TRUE                  ~ "On target"
@@ -485,14 +560,16 @@ server <- function(input, output, session) {
         credited     = colDef(name = "CME Credited", width = 100),
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
+        soft_min     = colDef(name = "Min Floor",    width = 80),
         actual       = colDef(name = "Actual",       width = 70),
-        status       = colDef(name = "Status",       width = 90,
+        status       = colDef(name = "Status",       width = 115,
           style = function(value) {
             list(
-              color      = switch(value,
-                "Under"     = "#CC0000",
-                "Over"      = "#0066CC",
-                "On target" = "#009900",
+              color = switch(value,
+                "Below minimum" = "#990000",
+                "Under"         = "#CC6600",
+                "Over"          = "#0066CC",
+                "On target"     = "#009900",
                 "#000"),
               fontWeight = "bold"
             )
@@ -508,5 +585,34 @@ server <- function(input, output, session) {
                            fontWeight = "bold")
       )
     )
+  })
+
+  # ── Count viable schedules (no-good cut enumeration) ──────────────────────
+  count_sol_result <- reactiveVal(NULL)
+
+  observeEvent(input$count_sol_btn, {
+    req(pipeline())
+    sched <- pipeline()$sched
+    lim   <- as.integer(input$count_sol_limit)
+    count_sol_result(NULL)
+    withProgress(message = sprintf("Counting schedules (up to %d)…", lim), value = 0.1, {
+      n <- sched$count_solutions(max_count = lim)
+    })
+    count_sol_result(list(n = n, lim = lim))
+  })
+
+  output$count_sol_ui <- renderUI({
+    res <- count_sol_result()
+    if (is.null(res)) return(NULL)
+    if (res$n >= res$lim) {
+      msg <- sprintf(
+        "Found at least %d distinct feasible schedules (limit reached — there may be more).",
+        res$n)
+      cls <- "alert alert-info mt-2"
+    } else {
+      msg <- sprintf("Found exactly %d distinct feasible schedule(s) satisfying all active constraints.", res$n)
+      cls <- "alert alert-success mt-2"
+    }
+    tags$div(class = cls, tags$strong(msg))
   })
 }

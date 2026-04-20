@@ -68,7 +68,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
     if (!is.na(typ)) {
-      return(switch(typ, cme = "CME", off = "OFF", vac = "VAC", ""))
+      return(switch(typ, cme = "CME", off = "OFF", vac = "OFF", ""))
     }
     ""
   }
@@ -79,7 +79,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      VAC  = C_PEACH,
       CME  = C_ORANGE, OFF = C_PINK,
       NULL)
   }
@@ -88,7 +87,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      VAC = F_BROWN,
       CME = F_WHITE, OFF = F_RED,
       "#000000")
   }
@@ -115,6 +113,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     any(vapply(dbn_set, function(x) x$date == d && x$person == person, logical(1L)))
 
   N_STAFF <- length(STAFF)
+  N_HDR   <- 7L
   N_PP    <- nrow(PAY_PERIODS)
 
   # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
@@ -331,7 +330,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
     x = paste0("APP1 / APP2 / APP 3 = day shift  \u00B7  Night = night shift  ",
-               "\u00B7  VAC = vacation  \u00B7  CME = conference  \u00B7  OFF = not scheduled"),
+               "\u00B7  CME = conference  \u00B7  OFF = vacation / day off"),
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
@@ -668,8 +667,10 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     # APP1 / APP2 / APP3 slot cols (4-6)
     day_vals <- c(app1, app2, roam)
     for (j in 1:3) {
-      val <- day_vals[j]
-      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else bg_day
+      val     <- day_vals[j]
+      is_app3 <- j == 3L
+      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else
+             if (is_app3) C_PEACH else bg_day
       cfc <- if (nchar(val) > 0) F_BLUE else F_GRAY
       addStyle(wb, "Schedule",
         mk(fg = cbg, bold = nchar(val) > 0, font_color = cfc,
@@ -718,7 +719,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
   setColWidths(wb, "Schedule",
     cols   = seq_len(N_COLS),
-    widths = c(11, 5, 5, 13, 9, 13, 13, rep(9, N_STAFF), 18))
+    widths = c(14, 7, 7, 16, 14, 16, 16, rep(13, N_STAFF), 20))
 
   # ── Save ───────────────────────────────────────────────────────────────────
   saveWorkbook(wb, output_path, overwrite = TRUE)
