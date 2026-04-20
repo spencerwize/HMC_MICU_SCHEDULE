@@ -42,6 +42,7 @@
 # ───────────
 #   C1    Slot uniqueness:    Σ_p x[p,d,s]     ≤ 1           for all d,s
 #   C2    APP1 coverage:      Σ_p x[p,d,APP1]  = 1           for all d
+#   C2b   APP2 coverage:      Σ_p x[p,d,APP2]  = 1           for all d
 #   C3    Night coverage:     Σ_p x[p,d,Night] = 1  (or ≤1)  for all d
 #   C4    No double-book:     Σ_s x[p,d,s]     ≤ 1           for all p,d
 #   C5    Availability:       ub = 0 for blocked (p,d) pairs
@@ -560,6 +561,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         add_con(cols, rep(1, nP), "=", 1)
       }
 
+      # ── C2b: APP2 always filled — Σ_p x[p,d,APP2] = 1 ───────────────────────
+      for (d in seq_len(nD)) {
+        cols <- vapply(seq_len(nP), function(p) xidx(p, d, S_APP2), integer(1L))
+        add_con(cols, rep(1, nP), "=", 1)
+      }
+
       # ── C3: Night coverage ────────────────────────────────────────────────────
       c3_type <- if (night_required) "=" else "<="
       for (d in seq_len(nD)) {
@@ -1032,9 +1039,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       for (di in seq_len(nD)) {
         d       <- dates_vec[di]
         n_avail <- sum(vapply(STAFF, function(p) !is_blocked(p, d), logical(1L)))
-        if (n_avail < 2L) {
+        if (n_avail < 3L) {
           issues <- c(issues, sprintf(
-            "[COVERAGE] %s (%s): only %d/%d staff available — need >= 2 for APP1+Night",
+            "[COVERAGE] %s (%s): only %d/%d staff available — need >= 3 for APP1+APP2+Night",
             format(d), weekdays(d, abbreviate = TRUE), n_avail, nP))
         }
       }
