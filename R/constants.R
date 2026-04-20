@@ -65,9 +65,7 @@ DEFAULT_SOFT_MIN <- 5L
 # Per-person base shift target overrides (default 6 for everyone not listed).
 # Value can be a single integer (applies to all PPs) or a named list of
 # PP-specific overrides — unlisted PPs fall back to 6.
-BASE_TARGETS <- list(
-  Mandie = list(PP16 = 5L, PP19 = 5L)
-)
+BASE_TARGETS <- list()
 
 VAC_KEYWORDS <- c("vac", "hawaii", "galapagos", "trip", "vacation", "travel")
 

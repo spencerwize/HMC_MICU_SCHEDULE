@@ -1165,8 +1165,18 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (is_working_p(person, d)) next
           if (had_night_prev(person, d)) next
           if (would_exceed_consec(person, d)) next
+
+          shifts_df      <- self$person_shifts[[person]]
+          n_nights       <- length(self$person_nights[[person]])
+          n_weekends     <- if (nrow(shifts_df) == 0L) 0L else
+                             sum(weekdays(shifts_df$date) %in%
+                                   c("Saturday", "Sunday"))
+          # Primary: PP deficit; secondary: total nights (compensate heavy
+          # night workers); tertiary: weekend shifts worked
+          score <- deficit * 100L + n_nights * 10L + n_weekends
+
           candidates <- c(candidates, person)
-          deficits   <- c(deficits, deficit)
+          deficits   <- c(deficits, score)
         }
 
         if (length(candidates) == 0L) next

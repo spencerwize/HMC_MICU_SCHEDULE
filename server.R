@@ -374,6 +374,13 @@ server <- function(input, output, session) {
       ) %>%
       arrange(date)
 
+    # Flag days where no one is assigned to APP 3
+    staff_present <- STAFF[STAFF %in% names(wide)]
+    wide$app3_open <- apply(
+      wide[, staff_present, drop = FALSE], 1,
+      function(row) !any(row == "APP 3", na.rm = TRUE)
+    )
+
     # Make cell colour helper
     make_col <- function(person_name) {
       colDef(
@@ -395,6 +402,18 @@ server <- function(input, output, session) {
 
     person_cols <- setNames(lapply(STAFF, make_col), STAFF)
 
+    app3_col <- colDef(
+      name  = "APP3",
+      width = 46,
+      style = function(value) {
+        if (isTRUE(value))
+          list(background = "#FCE4D6", textAlign = "center")
+        else
+          list(background = "#E2EFDA", textAlign = "center")
+      },
+      cell = function(value) if (isTRUE(value)) "\u2205" else "\u2713"
+    )
+
     date_col <- colDef(
       name = "Date",
       width = 90,
@@ -406,9 +425,10 @@ server <- function(input, output, session) {
       wide,
       columns = c(
         list(
-          date     = date_col,
-          day_name = colDef(name = "Day", width = 40),
-          pp       = colDef(name = "PP",  width = 45),
+          date      = date_col,
+          day_name  = colDef(name = "Day",  width = 40),
+          pp        = colDef(name = "PP",   width = 45),
+          app3_open = app3_col,
           is_holiday = colDef(show = FALSE),
           is_weekend = colDef(show = FALSE)
         ),
