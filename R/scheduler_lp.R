@@ -178,6 +178,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
         message("  Translating ILP solution to schedule…")
         private$populate_from_solution(best_res)
+        message("  Filling remaining APP3 slots for under-scheduled staff…")
+        private$fill_roaming_pass()
         message("  Done.")
         return(invisible(self))
       }
@@ -1092,6 +1094,70 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       stop("ILP scheduling failed after all relaxation tiers — see diagnostics above.",
            call. = FALSE)
+    },
+
+    # ── Phase 2: greedy APP3 fill-in for under-scheduled staff ─────────────────
+    # Runs after the ILP solution is committed.  Assigns empty Roaming slots to
+    # people who are below their sched_target for that PP.  All hard constraints
+    # (availability, no double-booking, C7 night→day ban, PP cap) are respected;
+    # run-length rules (C8/C15/C16) are intentionally not applied here.
+    fill_roaming_pass = function() {
+      dates_vec <- sort(as.Date(names(self$schedule)))
+
+      is_blocked_p <- function(person, d) {
+        pdata <- self$time_off[[person]]
+        nrow(pdata) > 0 &&
+          any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))
+      }
+
+      is_working_p <- function(person, d) {
+        day <- self$schedule[[as.character(d)]]
+        person %in% c(day$APP1, day$APP2, day$Night, day$Roaming)
+      }
+
+      had_night_prev <- function(person, d) {
+        ps <- as.character(d - 1L)
+        ps %in% names(self$schedule) &&
+          isTRUE(self$schedule[[ps]]$Night == person)
+      }
+
+      n_filled <- 0L
+
+      for (d in dates_vec) {
+        ds  <- as.character(d)
+        day <- self$schedule[[ds]]
+        if (!is.na(day$Roaming)) next
+
+        pp <- get_pp(d)
+        if (is.na(pp)) next
+
+        candidates <- character(0)
+        deficits   <- integer(0)
+
+        for (person in STAFF) {
+          tgt <- self$targets[[person]][[pp]]
+          if (is.null(tgt)) next
+          deficit <- tgt$sched_target - self$pp_counts[[person]][[pp]]
+          if (deficit <= 0L) next
+          if (is_blocked_p(person, d)) next
+          if (is_working_p(person, d)) next
+          if (had_night_prev(person, d)) next
+          candidates <- c(candidates, person)
+          deficits   <- c(deficits, deficit)
+        }
+
+        if (length(candidates) == 0L) next
+
+        best <- candidates[which.max(deficits)]
+        self$schedule[[ds]]$Roaming           <- best
+        self$pp_counts[[best]][[pp]]          <- self$pp_counts[[best]][[pp]] + 1L
+        self$person_shifts[[best]] <- rbind(
+          self$person_shifts[[best]],
+          data.frame(date = d, slot = "Roaming", stringsAsFactors = FALSE))
+        n_filled <- n_filled + 1L
+      }
+
+      message(sprintf("  Roaming fill pass: %d additional APP3 shift(s) assigned.", n_filled))
     }
   )
 )
