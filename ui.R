@@ -54,20 +54,6 @@ ui <- page_navbar(
           "Candidates per tier. Each adds one full ILP solve — keep low for speed."
         ),
         br(),
-        numericInput("solver_time_limit", "Time limit per solve (sec):",
-          value = SOLVER_TIME_LIMIT, min = 15L, max = 600L, step = 15L
-        ),
-        tags$small(class = "text-muted",
-          "Hard cap per candidate. Solver returns best found if limit is hit."
-        ),
-        br(),
-        numericInput("solver_mip_gap", "MIP gap tolerance (0–1):",
-          value = SOLVER_MIP_GAP, min = 0, max = 0.5, step = 0.01
-        ),
-        tags$small(class = "text-muted",
-          "Solver stops early when within this fraction of optimal (e.g. 0.02 = 2%)."
-        ),
-        br(),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
