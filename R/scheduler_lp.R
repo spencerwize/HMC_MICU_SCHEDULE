@@ -165,11 +165,16 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           }
         }
 
-        scores   <- vapply(candidates, private$score_solution, numeric(1L))
+        message(sprintf("  %d candidate(s) — filling each and ranking by shift evenness…",
+                        length(candidates)))
+        scores <- vapply(seq_along(candidates), function(ci) {
+          message(sprintf("    Candidate %d/%d: fill + evenness score…",
+                          ci, length(candidates)))
+          private$score_candidate_evenness(candidates[[ci]])
+        }, numeric(1L))
         best_idx <- which.max(scores)
-        message(sprintf("  %d candidate(s). Scores: [%s]  → best #%d (%.1f)",
-                        length(candidates),
-                        paste(round(scores, 1L), collapse = ", "),
+        message(sprintf("  Evenness scores [-(SD_nights + SD_saturdays)]: [%s]  → best #%d (%.3f)",
+                        paste(round(scores, 3L), collapse = ", "),
                         best_idx, scores[best_idx]))
 
         best_res   <- candidates[[best_idx]]
@@ -177,9 +182,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         x_found    <- NULL
         gc()
 
-        message("  Translating ILP solution to schedule…")
+        message("  Populating best candidate and filling APP3 slots…")
         private$populate_from_solution(best_res)
-        message("  Filling remaining APP3 slots for under-scheduled staff…")
         private$fill_roaming_pass()
         message("  Done.")
         return(invisible(self))
@@ -468,6 +472,43 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       n_filled
+    },
+
+    # ── Score candidate after APP3 fill by shift-evenness ─────────────────────
+    # Populates the schedule, runs greedy APP3 fill, measures how evenly
+    # Saturday shifts and night shifts are spread across all staff, then resets
+    # the schedule to empty so the next candidate can be evaluated cleanly.
+    # Returns -(SD_nights + SD_saturdays): higher score = more even distribution.
+    score_candidate_evenness = function(res) {
+      private$populate_from_solution(res)
+      private$fill_roaming_pass()
+
+      dates_vec <- as.Date(self$dates, origin = "1970-01-01")
+      sat_dates <- dates_vec[weekdays(dates_vec) == "Saturday"]
+
+      nights_ct <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
+      sat_ct    <- vapply(STAFF, function(p) {
+        sh <- self$person_shifts[[p]]
+        if (nrow(sh) == 0L) return(0L)
+        as.integer(sum(sh$date %in% sat_dates))
+      }, integer(1L))
+
+      score <- -(sd(nights_ct) + sd(sat_ct))
+
+      # Reset all mutable schedule state back to empty (mirrors initialize())
+      empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
+                         Roaming = NA_character_, Night = NA_character_)
+      self$schedule      <- setNames(lapply(self$dates, function(d) empty_slot),
+                                     as.character(self$dates))
+      self$person_nights <- setNames(lapply(STAFF, function(p) as.Date(character())), STAFF)
+      self$person_shifts <- setNames(
+        lapply(STAFF, function(p) data.frame(date   = as.Date(character()),
+                                             slot   = character(),
+                                             stringsAsFactors = FALSE)), STAFF)
+      zero_pp <- setNames(integer(nrow(PAY_PERIODS)), PAY_PERIODS$name)
+      self$pp_counts <- setNames(lapply(STAFF, function(p) zero_pp), STAFF)
+
+      score
     },
 
     # Relaxation cascade: solver tries each tier in order, stopping at the
