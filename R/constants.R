@@ -65,6 +65,12 @@ SOLVER_MIP_GAP   <- 0.09
 # Candidates to collect per tier before picking the best-scored one.
 N_CANDIDATES     <- 5L
 
+# Soft-minimum total shift counts per person across the FULL schedule.
+# The solver penalises falling below these floors in the objective but they
+# are not hard constraints — availability/vacation may prevent reaching them.
+MIN_NIGHTS_SOFT_TOTAL <- 9L   # total night shifts per person
+MIN_WKND_SOFT_TOTAL   <- 11L  # total Saturday + Sunday shifts per person
+
 # Default soft minimum shifts per PP for anyone not listed in FLEX_TARGETS.
 # Scheduler will try to reach sched_target (6) but only hard-enforces this floor.
 DEFAULT_SOFT_MIN <- 5L

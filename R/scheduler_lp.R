@@ -54,6 +54,8 @@
 #   C10b  Max 2 consec Sat:  work[p,sat_k]+work[p,sat_{k+1}]+work[p,sat_{k+2}] ≤ 2
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
 #   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 6  per person per calendar month
+#   C_ns  Night soft-min:    ns_short[p] + Σ_d x[p,d,Night] ≥ MIN_NIGHTS_SOFT_TOTAL
+#   C_ws  Weekend soft-min:  ws_short[p] + Σ_{d∈Sat/Sun} work[p,d] ≥ MIN_WKND_SOFT_TOTAL
 #   C12   Holiday pre-seed:   lb = ub = 1 for pre-assigned (p,d,s)
 #   C13   Min 2 consec Nts:   isolated night shifts forbidden
 #   C14   Fairness bounds:    Σ x ≤ max_M,  Σ x ≥ min_M  per person per metric
@@ -659,18 +661,32 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       bpoff   <- hnoff + nHN
       bpidx   <- function(p, k) bpoff + (p - 1L) * nPairs + k
 
-      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS + nHN + nBP
+      # Soft-minimum shortfall variables (continuous >= 0):
+      #   ns_short[p] = max(0, MIN_NIGHTS_SOFT_TOTAL  - actual nights for p)
+      #   ws_short[p] = max(0, MIN_WKND_SOFT_TOTAL    - actual Sat+Sun shifts for p)
+      # Each is penalised in the objective; the solver treats them as soft floors.
+      nNSSHORT  <- nP
+      nsshoff   <- bpoff + nBP
+      nsshidx   <- function(p) nsshoff + p
+      nWSSHORT  <- nP
+      wsshoff   <- nsshoff + nNSSHORT
+      wsshidx   <- function(p) wsshoff + p
+
+      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS + nHN + nBP +
+            nNSSHORT + nWSSHORT
 
       # Variable bounds and types
       lb    <- numeric(nV)
       ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW),
                  rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4),
-                 rep(1, nISO), rep(1, nSRS), rep(1, nHN), rep(1, nBP))
+                 rep(1, nISO), rep(1, nSRS), rep(1, nHN), rep(1, nBP),
+                 rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
+                 rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT))
       types <- c(rep("I", nX),
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
                  rep("I", nISO),
                  rep("I", nSRS),
-                 rep("C", nHN + nBP))
+                 rep("C", nHN + nBP + nNSSHORT + nWSSHORT))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -714,6 +730,15 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         for (p in seq_len(nP))
           for (k in seq_len(nPairs))
             obj[bpidx(p, k)] <- NIGHT_SPREAD_W * (pp_pairs[k, 2L] - pp_pairs[k, 1L])
+      # Soft-minimum penalties: penalise each unit a person falls below the
+      # schedule-wide night/weekend floor.  Penalty > base assignment weight so
+      # the solver strongly prefers reaching the minimum before going above it.
+      NIGHTS_SHORT_PEN <- 8.0   # per night below MIN_NIGHTS_SOFT_TOTAL
+      WKND_SHORT_PEN   <- 4.0   # per Sat/Sun shift below MIN_WKND_SOFT_TOTAL
+      for (p in seq_len(nP)) {
+        obj[nsshidx(p)] <- -NIGHTS_SHORT_PEN
+        obj[wsshidx(p)] <- -WKND_SHORT_PEN
+      }
 
       # Constraint accumulator (triplet form → sparseMatrix)
       n_con   <- 0L
@@ -1171,6 +1196,26 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C_ns: Night soft-minimum — ns_short[p] + Σ_d x[p,d,Night] ≥ MIN ────────
+      # ns_short[p] = max(0, MIN_NIGHTS_SOFT_TOTAL - actual nights).
+      # Combined with lb=0 and ub=MIN, this forces the solver to "pay" a penalty
+      # for every night below the soft floor.
+      for (pi in seq_len(nP)) {
+        night_cols <- vapply(seq_len(nD), function(di) xidx(pi, di, S_NIGHT), integer(1L))
+        add_con(c(nsshidx(pi), night_cols),
+                c(1L, rep(1L, nD)), ">=", MIN_NIGHTS_SOFT_TOTAL)
+      }
+
+      # ── C_ws: Weekend soft-minimum — ws_short[p] + Σ_{d=Sat/Sun} work[p,d] ≥ MIN
+      {
+        wknd_di <- which(weekdays(dates_vec) %in% c("Saturday", "Sunday"))
+        for (pi in seq_len(nP)) {
+          wknd_cols <- vapply(wknd_di, function(di) widx(pi, di), integer(1L))
+          add_con(c(wsshidx(pi), wknd_cols),
+                  c(1L, rep(1L, length(wknd_cols))), ">=", MIN_WKND_SOFT_TOTAL)
+        }
+      }
+
       # ── Extra no-good cuts (solution enumeration) ─────────────────────────────
       for (x_prev in extra_nogo) {
         on_idx <- which(x_prev > 0.5)
@@ -1179,7 +1224,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── Assemble and solve ────────────────────────────────────────────────────
-      nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nHN + nBP
+      nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nHN + nBP + nNSSHORT + nWSSHORT
       message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
                       nX, nCont, n_con))
 
