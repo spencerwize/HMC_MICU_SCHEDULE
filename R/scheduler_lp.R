@@ -1153,9 +1153,13 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                         result$status_message))
         return(NULL)
       }
-      message(sprintf("  Solver: %s  objective = %.1f",
+      message(sprintf("  Solver: %s  objective = %.1f%s",
                       result$status_message,
-                      if (!is.null(result$objective_value)) result$objective_value else NA_real_))
+                      if (!is.null(result$objective_value)) result$objective_value else NA_real_,
+                      {
+                        ub <- result$info$mip_dual_bound
+                        if (!is.null(ub) && is.finite(ub)) sprintf("  (max: %.1f)", ub) else ""
+                      }))
 
       list(sol = sol, nP = nP, nD = nD, nX = nX, xidx = xidx, dates_vec = dates_vec)
     },
