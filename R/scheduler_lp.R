@@ -48,6 +48,7 @@
 #   C5    Availability:       ub = 0 for blocked (p,d) pairs
 #   C6    PP shift cap:       Σ_{d∈PP,s} x[p,d,s] ≤ target   for all p,PP
 #   C7    Night→Day 1d ban:   x[p,d,Night] + x[p,d+1,s] ≤ 1  s∈DAY_SLOTS
+#   C7b   Night→Day 2d ban:   x[p,d,Night] + x[p,d+2,s] ≤ 1  s∈DAY_SLOTS  (2 rest days after last night)
 #   C8    Day→Night 1d gap:   x[p,d,s] + x[p,d+1,Night] ≤ 1  s∈DAY_SLOTS
 #   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
@@ -446,8 +447,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           # Not already working this day
           if (working[pi, di]) next
 
-          # C7: no day shift after a night
+          # C7/C7b: no day shift within 2 days after a night
           if (di > 1L && isTRUE(round(sol[xidx(pi, di - 1L, S_NIGHT)]) == 1L)) next
+          if (di > 2L && isTRUE(round(sol[xidx(pi, di - 2L, S_NIGHT)]) == 1L)) next
 
           # C10: consecutive days
           run <- 1L; k <- 1L
@@ -882,6 +884,17 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           ni <- xidx(pi, di, S_NIGHT)
           for (s in DAY_S)
             add_con(c(ni, xidx(pi, di + 1L, s)), c(1, 1), "<=", 1)
+        }
+      }
+
+      # ── C7b: Night→Day ban 2d — x[p,d,Night] + x[p,d+2,s] ≤ 1 ─────────────
+      # Enforces two full rest days between the end of any night shift and the
+      # next day-shift assignment (eliminates Night-rest-APP patterns).
+      for (pi in seq_len(nP)) {
+        for (di in seq_len(nD - 2L)) {
+          ni <- xidx(pi, di, S_NIGHT)
+          for (s in DAY_S)
+            add_con(c(ni, xidx(pi, di + 2L, s)), c(1, 1), "<=", 1)
         }
       }
 
@@ -1408,10 +1421,15 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         isTRUE(person %in% c(day$APP1, day$APP2, day$Night, day$Roaming))
       }
 
-      had_night_prev <- function(person, d) {
-        ps <- format(d - 1L, "%Y-%m-%d")
-        isTRUE(ps %in% names(self$schedule)) &&
-          isTRUE(self$schedule[[ps]]$Night == person)
+      had_night_recent <- function(person, d) {
+        # C7/C7b: block if person worked Night on d-1 or d-2
+        for (k in 1:2) {
+          ps <- format(d - k, "%Y-%m-%d")
+          if (isTRUE(ps %in% names(self$schedule)) &&
+              isTRUE(self$schedule[[ps]]$Night == person))
+            return(TRUE)
+        }
+        FALSE
       }
 
       # C10: adding d would create a run of 5+ consecutive work days
@@ -1454,7 +1472,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (!isTRUE(deficit > 0L)) next
           if (is_blocked_p(person, d)) next
           if (is_working_p(person, d)) next
-          if (had_night_prev(person, d)) next
+          if (had_night_recent(person, d)) next
           if (would_exceed_consec(person, d)) next
 
           shifts_df      <- self$person_shifts[[person]]
