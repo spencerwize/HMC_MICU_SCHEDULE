@@ -56,7 +56,7 @@ FLEX_TARGETS <- list(
 )
 
 # ILP solver wall-clock budget per candidate (seconds).
-SOLVER_TIME_LIMIT <- 120L
+SOLVER_TIME_LIMIT <- 120
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap
