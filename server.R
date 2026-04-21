@@ -69,7 +69,6 @@ server <- function(input, output, session) {
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)
-      balance <- staffing_balance_df(targets)
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
       sched <- SchedulerLP$new(time_off, targets)
@@ -90,7 +89,6 @@ server <- function(input, output, session) {
         sched      = sched,
         time_off   = time_off,
         targets    = targets,
-        balance    = balance,
         validation = validation,
         tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
@@ -152,34 +150,6 @@ server <- function(input, output, session) {
       h2(lbl, class = paste(cls, "mb-0")),
       if (!is.null(tu))
         tags$small(class = "text-muted", tu$label)
-    )
-  })
-
-  output$balance_table <- renderReactable({
-    req(pipeline())
-    df <- pipeline()$balance
-    status_colors <- c(IMPOSSIBLE = "#FFC7CE", TIGHT = "#FFD966", OK = "#92D050")
-    reactable(
-      df,
-      columns = list(
-        PP         = colDef(name = "Pay Period", minWidth = 85),
-        Days       = colDef(name = "Days",       minWidth = 55, align = "center"),
-        Capacity   = colDef(name = "Slots",      minWidth = 60, align = "center"),
-        Demand     = colDef(name = "Demand",     minWidth = 70, align = "center"),
-        Staff_Days = colDef(name = "Avail Days", minWidth = 85, align = "center"),
-        Slack      = colDef(name = "Slack",      minWidth = 65, align = "center"),
-        Status     = colDef(name = "Status",     minWidth = 100, align = "center",
-          cell = function(value) {
-            bg <- status_colors[[value]]
-            tags$span(
-              style = sprintf("background:%s;padding:2px 10px;border-radius:3px;font-weight:600;", bg),
-              value
-            )
-          }
-        )
-      ),
-      striped = TRUE, highlight = TRUE, bordered = TRUE,
-      defaultPageSize = nrow(df), pagination = FALSE, compact = TRUE
     )
   })
 
