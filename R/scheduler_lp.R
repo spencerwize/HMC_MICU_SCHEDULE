@@ -52,7 +52,7 @@
 #   C8    Day→Night 1d gap:   x[p,d,s] + x[p,d+1,Night] ≤ 1  s∈DAY_SLOTS
 #   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
-#   C10b  Max 2 consec Sat:  work[p,sat_k]+work[p,sat_{k+1}]+work[p,sat_{k+2}] ≤ 2
+#   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
 #   C10c  8-day density cap:  Σ_{k=0}^7 work[p,d+k]       ≤ 6
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
 #   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 6  per person per calendar month
@@ -947,16 +947,15 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C10b: No 3 consecutive Saturday shifts per person ─────────────────────
-      # Uses work[p,d] (already equals Σ_s x[p,d,s]).  Saturdays are 7 days apart
-      # so "consecutive" here means the k-th, (k+1)-th, (k+2)-th Saturday in the
-      # schedule window.
-      {
-        sat_idx <- which(weekdays(dates_vec) == "Saturday")
-        if (length(sat_idx) >= 3L) {
+      # ── C10b: No 3 consecutive Saturday or Sunday shifts per person ───────────
+      # "Consecutive" means the k-th, (k+1)-th, (k+2)-th occurrence of that
+      # weekday in the schedule window — each 7 days apart.
+      for (wday in c("Saturday", "Sunday")) {
+        wday_idx <- which(weekdays(dates_vec) == wday)
+        if (length(wday_idx) >= 3L) {
           for (pi in seq_len(nP)) {
-            for (k in seq_len(length(sat_idx) - 2L)) {
-              cols <- vapply(sat_idx[k:(k + 2L)], function(di) widx(pi, di), integer(1L))
+            for (k in seq_len(length(wday_idx) - 2L)) {
+              cols <- vapply(wday_idx[k:(k + 2L)], function(di) widx(pi, di), integer(1L))
               add_con(cols, rep(1L, 3L), "<=", 2L)
             }
           }
