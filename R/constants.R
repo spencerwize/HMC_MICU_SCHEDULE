@@ -63,7 +63,7 @@ SOLVER_TIME_LIMIT <- 120
 # of 0.09 accepts the integer optimum without wasting time chasing the LP ceiling.
 SOLVER_MIP_GAP   <- 0.09
 # Candidates to collect per tier before picking the best-scored one.
-N_CANDIDATES     <- 1L
+N_CANDIDATES     <- 5L
 
 # Soft-minimum total shift counts per person across the FULL schedule.
 # The solver penalises falling below these floors in the objective but they

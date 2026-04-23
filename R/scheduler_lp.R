@@ -182,7 +182,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           private$score_candidate_evenness(candidates[[ci]])
         }, numeric(1L))
         best_idx <- which.max(scores)
-        message(sprintf("  Evenness scores [-(SD_nights + SD_saturdays)]: [%s]  → best #%d (%.3f)",
+        message(sprintf("  Evenness scores [-(SD_wknd + SD_fri_nights + SD_nights)]: [%s]  → best #%d (%.3f)",
                         paste(round(scores, 3L), collapse = ", "),
                         best_idx, scores[best_idx]))
 
@@ -496,17 +496,22 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       private$populate_from_solution(res)
       private$fill_roaming_pass()
 
-      dates_vec <- as.Date(self$dates, origin = "1970-01-01")
-      sat_dates <- dates_vec[weekdays(dates_vec) == "Saturday"]
+      dates_vec   <- as.Date(self$dates, origin = "1970-01-01")
+      wknd_dates  <- dates_vec[weekdays(dates_vec) %in% c("Saturday", "Sunday")]
+      fri_dates   <- dates_vec[weekdays(dates_vec) == "Friday"]
 
-      nights_ct <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
-      sat_ct    <- vapply(STAFF, function(p) {
+      nights_ct  <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
+      wknd_ct    <- vapply(STAFF, function(p) {
         sh <- self$person_shifts[[p]]
         if (nrow(sh) == 0L) return(0L)
-        as.integer(sum(sh$date %in% sat_dates))
+        as.integer(sum(sh$date %in% wknd_dates))
+      }, integer(1L))
+      fri_night_ct <- vapply(STAFF, function(p) {
+        nt <- self$person_nights[[p]]
+        as.integer(sum(nt %in% fri_dates))
       }, integer(1L))
 
-      score <- -(sd(nights_ct) + sd(sat_ct))
+      score <- -(sd(wknd_ct) + sd(fri_night_ct) + sd(nights_ct))
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
