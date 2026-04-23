@@ -479,20 +479,34 @@ server <- function(input, output, session) {
 
   output$chart_roaming <- renderPlotly({
     req(pipeline())
-    p <- pipeline()
+    p         <- pipeline()
+    all_dates <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_dates <- all_dates[weekdays(all_dates) %in% c("Saturday", "Sunday")]
     df <- data.frame(
-      person = STAFF,
-      roam   = sapply(STAFF, function(x)
-        sum(p$sched$person_shifts[[x]]$slot == "Roaming")),
+      person  = STAFF,
+      weekend = sapply(STAFF, function(x) {
+        sh <- p$sched$person_shifts[[x]]
+        if (nrow(sh) == 0L) return(0L)
+        sum(sh$date %in% wknd_dates)
+      }),
       stringsAsFactors = FALSE
     )
-    plot_ly(df, x = ~person, y = ~roam, type = "bar",
-            marker = list(color = "#92D050",
-                          line = list(color = "#5A9E2F", width = 1.5))) %>%
+    plot_ly(df, x = ~person, y = ~weekend, type = "bar",
+            marker = list(color = "#2E75B6",
+                          line = list(color = "#1A4D8C", width = 1.5))) %>%
       layout(
         xaxis = list(title = "", tickangle = -30),
-        yaxis = list(title = "Roaming Shifts"),
-        showlegend = FALSE
+        yaxis = list(title = "Weekend Shifts",
+                     range = list(0, max(20, max(df$weekend) + 1))),
+        showlegend = FALSE,
+        shapes = list(
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MIN_WKND_HARD, y1 = MIN_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5)),
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MAX_WKND_HARD, y1 = MAX_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5))
+        )
       ) %>%
       config(displayModeBar = FALSE)
   })

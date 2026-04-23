@@ -249,7 +249,7 @@ ui <- page_navbar(
           plotlyOutput("chart_nights", height = "320px")
         ),
         column(6,
-          h4("Roaming Shifts per Person"),
+          h4("Weekend Shifts per Person"),
           plotlyOutput("chart_roaming", height = "320px")
         )
       ),
