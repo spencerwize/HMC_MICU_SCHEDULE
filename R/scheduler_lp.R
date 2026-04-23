@@ -182,7 +182,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           private$score_candidate_evenness(candidates[[ci]])
         }, numeric(1L))
         best_idx <- which.max(scores)
-        message(sprintf("  Evenness scores [-(SD_wknd + SD_fri_nights + SD_nights)]: [%s]  → best #%d (%.3f)",
+        message(sprintf("  Evenness scores [-SD(wknd + fri_nights)]: [%s]  → best #%d (%.3f)",
                         paste(round(scores, 3L), collapse = ", "),
                         best_idx, scores[best_idx]))
 
@@ -511,7 +511,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         as.integer(sum(nt %in% fri_dates))
       }, integer(1L))
 
-      score <- -(sd(wknd_ct) + sd(fri_night_ct) + sd(nights_ct))
+      score <- -sd(wknd_ct + fri_night_ct)
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
