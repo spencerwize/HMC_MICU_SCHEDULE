@@ -55,7 +55,7 @@
 #   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
 #   C10c  8-day density cap:  Σ_{k=0}^7 work[p,d+k]       ≤ 6
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
-#   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 4  per person per calendar month
+#   C11b  No night stretch in consecutive PPs: Σ_{d∈PP_k∪PP_{k+1}} s[p,d] ≤ 1  (s = stretch-start)
 #   C11c  Weekend hard bounds: MIN_WKND_HARD ≤ Σ_{d∈Sat/Sun} work[p,d] ≤ MAX_WKND_HARD
 #   C_ns  Night soft-min:    ns_short[p] + Σ_d x[p,d,Night] ≥ MIN_NIGHTS_SOFT_TOTAL
 #   C_ws  Weekend soft-min:  ws_short[p] + Σ_{d∈Sat/Sun} work[p,d] ≥ MIN_WKND_SOFT_TOTAL
@@ -139,6 +139,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c9               = t$c9,
           add_c10              = t$c10,
           add_c10c             = t$c10c,
+          add_c11b             = t$c11b,
           add_c11c             = t$c11c,
           add_c13              = t$c13,
           add_c14              = t$c14,
@@ -219,6 +220,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c9             = t$c9,
           add_c10            = t$c10,
           add_c10c           = t$c10c,
+          add_c11b           = t$c11b,
           add_c11c           = t$c11c,
           add_c13            = t$c13,
           add_c14            = t$c14,
@@ -534,55 +536,55 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     RELAX_TIERS = list(
       list(label="Full model — all rules",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL, max_short=NULL),
       list(label="Run >= 3, max 1 short run/person (isolated or 2-day)",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=1L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=1L),
       list(label="Run >= 3, max 2 short runs/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=2L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=2L),
       list(label="Run >= 3, max 3 short runs/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=3L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=3L),
       list(label="Run >= 2 days",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="Any run length, max 1 isolated shift/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L,   max_short=NULL),
       list(label="Any run length, max 2 isolated shifts/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L,   max_short=NULL),
       list(label="Any run length, max 3 isolated shifts/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L,   max_short=NULL),
       list(label="Any run length",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="Night shift may be unstaffed",
            night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="PP cap reduced by 1",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="Drop C13 (min 2 consecutive nights)",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
-      list(label="Drop C8 (day -> night gap)",
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+      list(label="Drop C8 + C11b (day->night gap + PP-stretch rule)",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
-      list(label="Drop C8 + C13 / drop shift minimums",
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+      list(label="Drop C8 + C11b + C13 / drop shift minimums",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
-      list(label="Drop C8 + C13 + C10",
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+      list(label="Drop C8 + C11b + C13 + C10",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="PTO credits for staff with >4 off/vac days in PP",
            night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
       list(label="Hard coverage only (C1-C7, C11, C12)",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11c=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL)
+           c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -595,6 +597,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c9           = TRUE,
       add_c10          = TRUE,
       add_c10c         = TRUE,          # 8-day density cap: ≤ 6 shifts in any 8-day window
+      add_c11b         = TRUE,          # no night stretch in consecutive PPs
       add_c11c         = TRUE,          # weekend hard bounds: MIN_WKND_HARD ≤ total ≤ MAX_WKND_HARD
       add_c13          = TRUE,
       add_c14          = TRUE,
@@ -690,8 +693,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       wsshoff   <- nsshoff + nNSSHORT
       wsshidx   <- function(p) wsshoff + p
 
+      # Night stretch-start auxiliaries: ss[p,d] ∈ [0,1] continuous.
+      # Forced equal to 1 iff x[p,d,Night]=1 and x[p,d-1,Night]=0.
+      nSS    <- nP * nD
+      ssoff  <- wsshoff + nWSSHORT
+      ssidx  <- function(p, d) ssoff + (p - 1L) * nD + d
+
       nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS + nHN + nBP +
-            nNSSHORT + nWSSHORT
+            nNSSHORT + nWSSHORT + nSS
 
       # Variable bounds and types
       lb    <- numeric(nV)
@@ -699,12 +708,13 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                  rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4),
                  rep(1, nISO), rep(1, nSRS), rep(1, nHN), rep(1, nBP),
                  rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
-                 rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT))
+                 rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT),
+                 rep(1, nSS))
       types <- c(rep("I", nX),
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
                  rep("I", nISO),
                  rep("I", nSRS),
-                 rep("C", nHN + nBP + nNSSHORT + nWSSHORT))
+                 rep("C", nHN + nBP + nNSSHORT + nWSSHORT + nSS))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -987,14 +997,36 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         add_con(cols, rep(1, nD), "<=", MAX_NIGHTS_TOTAL)
       }
 
-      # ── C11b: Max 4 nights per person per calendar month ─────────────────────
-      months_in_sched <- unique(format(dates_vec, "%Y-%m"))
-      for (pi in seq_len(nP)) {
-        for (mo in months_in_sched) {
-          mo_idx <- which(format(dates_vec, "%Y-%m") == mo)
-          if (length(mo_idx) == 0L) next
-          cols <- vapply(mo_idx, function(di) xidx(pi, di, S_NIGHT), integer(1L))
-          add_con(cols, rep(1L, length(cols)), "<=", 4L)
+      # ── C11b: No night stretch in consecutive PPs ────────────────────────────
+      # ss[p,d] is a stretch-start indicator: 1 iff person p starts a new night
+      # stretch on day d (x[p,d,Night]=1 AND x[p,d-1,Night]=0).
+      # Definition constraints (hold for all d; treat x[p,0,Night] = 0):
+      #   ss[p,d] ≤ x[p,d,N]
+      #   ss[p,d] ≤ 1 - x[p,d-1,N]   (= 1 when d=1, implicit via ub)
+      #   ss[p,d] ≥ x[p,d,N] - x[p,d-1,N]   (= x[p,d,N] when d=1)
+      # PP-consecutive rule: Σ_{d∈PP_k ∪ PP_{k+1}} ss[p,d] ≤ 1  for k=1..nPP-1
+      if (add_c11b) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD)) {
+            si <- ssidx(pi, di)
+            ni <- xidx(pi, di, S_NIGHT)
+            add_con(c(si, ni), c(1, -1), "<=", 0)          # ss <= x[d,N]
+            if (di == 1L) {
+              add_con(c(si, ni), c(1, -1), ">=", 0)        # ss >= x[1,N]
+            } else {
+              ni_p <- xidx(pi, di - 1L, S_NIGHT)
+              add_con(c(si, ni, ni_p), c(1, -1, 1), ">=", 0) # ss >= x[d,N]-x[d-1,N]
+              add_con(c(si, ni_p),     c(1,  1),    "<=", 1)  # ss <= 1-x[d-1,N]
+            }
+          }
+        }
+        for (pi in seq_len(nP)) {
+          for (k in seq_len(nrow(PAY_PERIODS) - 1L)) {
+            dk_idx  <- which(dates_vec >= PAY_PERIODS$start[k]   & dates_vec <= PAY_PERIODS$end[k])
+            dk1_idx <- which(dates_vec >= PAY_PERIODS$start[k+1L] & dates_vec <= PAY_PERIODS$end[k+1L])
+            cols    <- vapply(c(dk_idx, dk1_idx), function(di) ssidx(pi, di), integer(1L))
+            add_con(cols, rep(1L, length(cols)), "<=", 1L)
+          }
         }
       }
 
