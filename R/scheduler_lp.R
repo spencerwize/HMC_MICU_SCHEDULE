@@ -55,7 +55,7 @@
 #   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
 #   C10c  8-day density cap:  Σ_{k=0}^7 work[p,d+k]       ≤ 6
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
-#   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 6  per person per calendar month
+#   C11b  Monthly night cap:  Σ_{d∈month} x[p,d,Night] ≤ 4  per person per calendar month
 #   C11c  Weekend hard bounds: MIN_WKND_HARD ≤ Σ_{d∈Sat/Sun} work[p,d] ≤ MAX_WKND_HARD
 #   C_ns  Night soft-min:    ns_short[p] + Σ_d x[p,d,Night] ≥ MIN_NIGHTS_SOFT_TOTAL
 #   C_ws  Weekend soft-min:  ws_short[p] + Σ_{d∈Sat/Sun} work[p,d] ≥ MIN_WKND_SOFT_TOTAL
@@ -987,14 +987,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         add_con(cols, rep(1, nD), "<=", MAX_NIGHTS_TOTAL)
       }
 
-      # ── C11b: Max 6 nights per person per calendar month ─────────────────────
+      # ── C11b: Max 4 nights per person per calendar month ─────────────────────
       months_in_sched <- unique(format(dates_vec, "%Y-%m"))
       for (pi in seq_len(nP)) {
         for (mo in months_in_sched) {
           mo_idx <- which(format(dates_vec, "%Y-%m") == mo)
           if (length(mo_idx) == 0L) next
           cols <- vapply(mo_idx, function(di) xidx(pi, di, S_NIGHT), integer(1L))
-          add_con(cols, rep(1L, length(cols)), "<=", 6L)
+          add_con(cols, rep(1L, length(cols)), "<=", 4L)
         }
       }
 
