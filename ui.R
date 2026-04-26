@@ -76,7 +76,7 @@ ui <- page_navbar(
           ),
           hr(),
           fluidRow(
-            column(3,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_days"),   class = "text-primary mb-0"),
@@ -84,27 +84,11 @@ ui <- page_navbar(
                 )
               )
             ),
-            column(3,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_shifts"), class = "text-primary mb-0"),
                   p("Total Shifts Scheduled",    class = "text-muted small")
-                )
-              )
-            ),
-            column(3,
-              card(class = "text-center",
-                card_body(
-                  h2(textOutput("stat_errors"), class = "text-danger mb-0"),
-                  p("Hard Constraint Errors",    class = "text-muted small")
-                )
-              )
-            ),
-            column(3,
-              card(class = "text-center",
-                card_body(
-                  uiOutput("stat_tier"),
-                  p("Relaxation Tier Used",      class = "text-muted small")
                 )
               )
             )
@@ -112,10 +96,7 @@ ui <- page_navbar(
           br(),
           conditionalPanel(
             "output.schedule_ready",
-            card(
-              card_header("Validation Results"),
-              card_body(uiOutput("validation_ui"))
-            )
+            uiOutput("validation_ui")
           ),
           br(),
           conditionalPanel(

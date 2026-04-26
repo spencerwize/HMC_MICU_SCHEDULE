@@ -132,52 +132,16 @@ server <- function(input, output, session) {
     as.character(n)
   })
 
-  output$stat_errors <- renderText({
-    req(pipeline())
-    as.character(length(pipeline()$validation$errors))
-  })
-
-  output$stat_tier <- renderUI({
-    req(pipeline())
-    tu  <- pipeline()$tier_used
-    idx <- if (is.null(tu)) NA_integer_ else tu$index
-    lbl <- if (is.null(tu)) "—" else sprintf("%d / 18", idx)
-    cls <- if (is.na(idx))    "text-secondary"
-           else if (idx <= 2) "text-success"
-           else if (idx <= 5) "text-warning"
-           else               "text-danger"
-    tagList(
-      h2(lbl, class = paste(cls, "mb-0")),
-      if (!is.null(tu))
-        tags$small(class = "text-muted", tu$label)
-    )
-  })
-
   output$validation_ui <- renderUI({
     req(pipeline())
-    v <- pipeline()$validation
-    errs  <- v$errors
-    warns <- v$warnings
-
-    err_ui <- if (length(errs) == 0) {
-      tags$div(class = "alert alert-success",
-        icon("check-circle"), " No hard constraint violations.")
-    } else {
-      tags$div(class = "alert alert-danger",
-        tags$strong(sprintf("%d constraint error(s):", length(errs))),
-        tags$ul(lapply(errs, tags$li))
-      )
-    }
-
-    warn_ui <- if (length(warns) == 0) NULL else {
-      tags$div(class = "alert alert-warning mt-2",
-        tags$strong(sprintf("%d warning(s):", length(warns))),
-        tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
-        if (length(warns) > 20)
-          tags$li(sprintf("… and %d more", length(warns) - 20))
-      )
-    }
-    tagList(err_ui, warn_ui)
+    warns <- pipeline()$validation$warnings
+    if (length(warns) == 0) return(NULL)
+    tags$div(class = "alert alert-warning",
+      tags$strong(sprintf("%d warning(s):", length(warns))),
+      tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
+      if (length(warns) > 20)
+        tags$li(sprintf("… and %d more", length(warns) - 20))
+    )
   })
 
   # ── Download Excel ────────────────────────────────────────────────────────
