@@ -147,9 +147,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c16              = t$c16,
           add_c_min            = t$c_min,
           allow_pto            = t$allow_pto,
-          max_iso_per_person   = t$max_iso,
-          max_short_per_person = t$max_short,
-          extra_nogo           = extra_nogo
+          max_iso_per_person      = t$max_iso,
+          max_short_per_person    = t$max_short,
+          max_unstaffed_per_month = t$unstaffed_mo_cap,
+          extra_nogo              = extra_nogo
         )
       }
 
@@ -228,9 +229,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c16            = t$c16,
           add_c_min            = t$c_min,
           allow_pto            = t$allow_pto,
-          max_iso_per_person   = t$max_iso,
-          max_short_per_person = t$max_short,
-          extra_nogo           = found
+          max_iso_per_person      = t$max_iso,
+          max_short_per_person    = t$max_short,
+          max_unstaffed_per_month = t$unstaffed_mo_cap,
+          extra_nogo              = found
         )
         if (is.null(res)) break
         count <- count + 1L
@@ -536,55 +538,55 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     RELAX_TIERS = list(
       list(label="Full model — all rules",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL, max_short=NULL, unstaffed_mo_cap=NULL),
       list(label="Run >= 3, max 1 short run/person (isolated or 2-day)",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=1L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=1L,   unstaffed_mo_cap=NULL),
       list(label="Run >= 3, max 2 short runs/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=2L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=2L,   unstaffed_mo_cap=NULL),
       list(label="Run >= 3, max 3 short runs/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=3L),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=3L,   unstaffed_mo_cap=NULL),
       list(label="Run >= 2 days",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL, max_short=NULL),
-      list(label="Night shift may be unstaffed",
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
+      list(label="Night shift may be unstaffed (max 3/month)",
            night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
       list(label="Any run length, max 1 isolated shift/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L,   max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="Any run length, max 2 isolated shifts/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L,   max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="PP cap reduced by 1",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
       list(label="Any run length, max 3 isolated shifts/person",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L,   max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L,   max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="Any run length",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="Drop C13 (min 2 consecutive nights)",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
       list(label="Drop C8 + C11b (day->night gap + PP-stretch rule)",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
       list(label="Drop C8 + C11b + C13 / drop shift minimums",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="Drop C8 + C11b + C13 + C10",
            night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="PTO credits for staff with >4 off/vac days in PP",
            night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL),
+           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
       list(label="Hard coverage only (C1-C7, C11, C12)",
            night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL)
+           c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL)
     ),
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
@@ -605,9 +607,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c16          = TRUE,          # no isolated 2-day blocks of day shifts (min run 3)
       add_c_min        = TRUE,          # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
       allow_pto        = FALSE,         # credit off/vac days as PTO when blocked_days > 4
-      max_iso_per_person   = NULL,       # NULL = unlimited; integer = max isolated single shifts per person
-      max_short_per_person = NULL,       # NULL = unlimited; integer = max short runs (len 1 or 2) per person
-      extra_nogo           = list()      # previously found x-vectors to exclude (solution enumeration)
+      max_iso_per_person       = NULL,       # NULL = unlimited; integer = max isolated single shifts per person
+      max_short_per_person     = NULL,       # NULL = unlimited; integer = max short runs (len 1 or 2) per person
+      max_unstaffed_per_month  = NULL,       # NULL = unlimited; integer = max unstaffed night slots per calendar month
+      extra_nogo               = list()      # previously found x-vectors to exclude (solution enumeration)
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -812,6 +815,21 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       for (d in seq_len(nD)) {
         cols <- vapply(seq_len(nP), function(p) xidx(p, d, S_NIGHT), integer(1L))
         add_con(cols, rep(1, nP), c3_type, 1)
+      }
+
+      # ── C3b: Max unstaffed nights per calendar month ─────────────────────────
+      # Only meaningful when night_required=FALSE; when nights are required this
+      # is trivially satisfied.  Constraint: Σ_{p,d∈mo} x[p,d,N] ≥ |mo| - cap
+      if (!is.null(max_unstaffed_per_month)) {
+        months_vec <- unique(format(dates_vec, "%Y-%m"))
+        for (mo in months_vec) {
+          mo_di <- which(format(dates_vec, "%Y-%m") == mo)
+          if (length(mo_di) == 0L) next
+          cols <- as.integer(unlist(lapply(mo_di, function(di)
+            vapply(seq_len(nP), function(pi) xidx(pi, di, S_NIGHT), integer(1L)))))
+          rhs  <- as.integer(length(mo_di) - max_unstaffed_per_month)
+          if (rhs > 0L) add_con(cols, rep(1L, length(cols)), ">=", rhs)
+        }
       }
 
       # ── C4: No double-booking — Σ_s x[p,d,s] ≤ 1 ────────────────────────────
