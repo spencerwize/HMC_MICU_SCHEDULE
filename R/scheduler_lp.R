@@ -659,7 +659,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       # Isolation-cap auxiliaries: iso[p,d] ∈ [0,1] continuous,
       # constrained to equal 1 when work[p,d]=1 and both neighbours=0.
-      nISO   <- if (!is.null(max_iso_per_person) && nD >= 2L) nP * nD else 0L
+      # Always allocated so the objective can penalise isolated shifts.
+      nISO   <- if (nD >= 2L) nP * nD else 0L
       isoff  <- ws4off + nWS4
       isoidx <- function(p, d) isoff + (p - 1L) * nD + d
 
@@ -754,9 +755,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +0.30
       if (nWS4 > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -0.40
-      # Tiny penalty on iso/srs variables so they stay at their natural lower bound.
+      # Penalise isolated single shifts — solver actively avoids them.
       if (nISO > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -0.001
+        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -1.5
+      # Tiny penalty on srs variables so they stay at their natural lower bound.
+
       if (nSRS > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD)) obj[srsidx(p, d)] <- -0.001
       # Night-spread bonus: bp[p,k]=1 iff person has nights in BOTH PP w1 and w2.
@@ -1161,11 +1164,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C15b: Isolation cap — at most max_iso_per_person isolated single shifts ─
+      # ── C15b: Isolation definition (always) + optional per-person cap ────────
       # iso[p,d] is forced to 1 when work[p,d]=1 and both neighbours=0.
       #   iso[p,d] >= work[p,d] - work[p,d-1] - work[p,d+1]  (lower bound)
       #   iso[p,d] <= work[p,d]                                (zero when not working)
-      #   Σ_d iso[p,d] <= max_iso_per_person
+      # Objective penalty (-1.5/shift) discourages isolated shifts even without cap.
+      # Hard cap Σ_d iso[p,d] <= max_iso_per_person is added when set.
       if (nISO > 0L) {
         for (pi in seq_len(nP)) {
           # Left boundary (d=1, no left neighbour)
@@ -1184,9 +1188,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           # Upper bound: iso <= work
           for (di in seq_len(nD))
             add_con(c(isoidx(pi, di), widx(pi, di)), c(1L, -1L), "<=", 0L)
-          # Per-person cap
-          add_con(vapply(seq_len(nD), function(di) isoidx(pi, di), integer(1L)),
-                  rep(1L, nD), "<=", max_iso_per_person)
+          # Optional hard cap
+          if (!is.null(max_iso_per_person))
+            add_con(vapply(seq_len(nD), function(di) isoidx(pi, di), integer(1L)),
+                    rep(1L, nD), "<=", max_iso_per_person)
         }
       }
 
