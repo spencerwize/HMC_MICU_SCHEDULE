@@ -142,7 +142,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c10c             = t$c10c,
           add_c11b             = t$c11b,
           add_c11c             = t$c11c,
-          add_c11d             = t$c11d,
+          night_min_hard       = t$night_min_hard,
+          night_max_hard       = t$night_max_hard,
           add_c13              = t$c13,
           add_c14              = t$c14,
           add_c15              = t$c15,
@@ -225,7 +226,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c10c           = t$c10c,
           add_c11b           = t$c11b,
           add_c11c           = t$c11c,
-          add_c11d           = t$c11d,
+          night_min_hard     = t$night_min_hard,
+          night_max_hard     = t$night_max_hard,
           add_c13            = t$c13,
           add_c14            = t$c14,
           add_c15            = t$c15,
@@ -536,61 +538,90 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       score
     },
 
-    # Relaxation cascade: solver tries each tier in order, stopping at the
-    # first feasible solution.  Each tier adds more flexibility than the last.
-    RELAX_TIERS = list(
-      list(label="Full model — all rules",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=TRUE,  max_iso=NULL, max_short=NULL, unstaffed_mo_cap=NULL),
-      list(label="Run >= 3, max 1 short run/person (isolated or 2-day)",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=1L,   unstaffed_mo_cap=NULL),
-      list(label="Run >= 3, max 2 short runs/person",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=2L,   unstaffed_mo_cap=NULL),
-      list(label="Run >= 3, max 3 short runs/person",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=3L,   unstaffed_mo_cap=NULL),
-      list(label="Run >= 2 days",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=TRUE,  c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Night shift may be unstaffed (max 3/month)",
-           night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
-      list(label="Any run length, max 1 isolated shift/person",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=1L,   max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Any run length, max 2 isolated shifts/person",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=2L,   max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="PP cap reduced by 1",
-           night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
-      list(label="Any run length, max 3 isolated shifts/person",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=3L,   max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Any run length",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Drop C13 (min 2 consecutive nights)",
-           night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=TRUE,  c11c=TRUE,  c11d=TRUE,  c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
-      list(label="Drop C8 + C11b (day->night gap + PP-stretch rule)",
-           night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=TRUE,  c11d=TRUE,  c13=TRUE,  c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=3L),
-      list(label="Drop C8 + C11b + C13 / drop shift minimums",
-           night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE,  c11b=FALSE, c11c=FALSE, c11d=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Drop C8 + C11b + C13 + C10",
-           night_req=FALSE, roam_obj=TRUE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c11d=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="PTO credits for staff with >4 off/vac days in PP",
-           night_req=FALSE, roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c11d=FALSE, c13=FALSE, c14=TRUE,  c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL),
-      list(label="Hard coverage only (C1-C7, C11, C12)",
-           night_req=TRUE,  roam_obj=TRUE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
-           c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE, c11d=FALSE, c13=FALSE, c14=FALSE, c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,  unstaffed_mo_cap=NULL)
-    ),
+    # ── Relaxation cascade: 6 blocks × 5 tiers + nuclear fallbacks ───────────
+    # Each block repeats the same 5-tier internal structure (run constraints),
+    # varying only night_req and night_min_hard/night_max_hard.
+    # Internal tiers per block:
+    #   A – Full model (min run 3 days)
+    #   B – Max 1 short run (len 1 or 2)
+    #   C – Max 2 short runs
+    #   D – Max 3 short runs
+    #   E – Run >= 2 days
+    RELAX_TIERS = {
+      mk <- function(label, night_req, night_min, night_max,
+                     c15, c16, max_iso, max_short, unstaffed_mo_cap) {
+        list(label=label,
+             night_req=night_req, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+             c8=TRUE,  c8b=TRUE,  c9=TRUE, c10=TRUE, c10c=TRUE, c11b=TRUE, c11c=TRUE,
+             c13=TRUE, c14=TRUE,
+             night_min_hard=night_min, night_max_hard=night_max,
+             c15=c15, c16=c16, max_iso=max_iso, max_short=max_short,
+             unstaffed_mo_cap=unstaffed_mo_cap)
+      }
+      mk_nuclear <- function(label, night_req, pp_red, allow_pto, c_min,
+                             c8, c8b, c9, c10, c10c, c11b, c11c,
+                             night_min, night_max, c13, c14) {
+        list(label=label,
+             night_req=night_req, roam_obj=TRUE, pp_red=pp_red, allow_pto=allow_pto,
+             c_min=c_min, c8=c8, c8b=c8b, c9=c9, c10=c10, c10c=c10c,
+             c11b=c11b, c11c=c11c,
+             night_min_hard=night_min, night_max_hard=night_max,
+             c13=c13, c14=c14,
+             c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,
+             unstaffed_mo_cap=NULL)
+      }
+      # Helper: generate the 5-tier block with given night settings
+      block <- function(blabel, night_req, night_min, night_max, unstaffed_mo_cap) {
+        list(
+          mk(sprintf("[%s] Full model — all run rules",          blabel), night_req, night_min, night_max, TRUE,  TRUE,  NULL, NULL, unstaffed_mo_cap),
+          mk(sprintf("[%s] Max 1 short run/person",              blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 1L,   unstaffed_mo_cap),
+          mk(sprintf("[%s] Max 2 short runs/person",             blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 2L,   unstaffed_mo_cap),
+          mk(sprintf("[%s] Max 3 short runs/person",             blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 3L,   unstaffed_mo_cap),
+          mk(sprintf("[%s] Run >= 2 days",                       blabel), night_req, night_min, night_max, TRUE,  FALSE, NULL, NULL, unstaffed_mo_cap)
+        )
+      }
+      c(
+        # Block 1: nights required, night bounds 8–12
+        block("B1", night_req=TRUE,  night_min=8L,   night_max=12L,  unstaffed_mo_cap=NULL),
+        # Block 2: nights required, night bounds 7–12
+        block("B2", night_req=TRUE,  night_min=7L,   night_max=12L,  unstaffed_mo_cap=NULL),
+        # Block 3: nights optional, night bounds 8–12
+        block("B3", night_req=FALSE, night_min=8L,   night_max=12L,  unstaffed_mo_cap=3L),
+        # Block 4: nights optional, night bounds 7–12
+        block("B4", night_req=FALSE, night_min=7L,   night_max=12L,  unstaffed_mo_cap=3L),
+        # Block 5: nights optional, night bounds 6–13
+        block("B5", night_req=FALSE, night_min=6L,   night_max=13L,  unstaffed_mo_cap=3L),
+        # Block 6: nights optional, no hard night bounds
+        block("B6", night_req=FALSE, night_min=NULL, night_max=NULL, unstaffed_mo_cap=3L),
+        # Nuclear fallbacks
+        list(
+          mk_nuclear("Drop C13 (min 2 consec nights)",
+                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
+                     c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=TRUE,  c11c=TRUE,
+                     night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
+          mk_nuclear("Drop C8 + C11b (day→night gap + PP-stretch rule)",
+                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
+                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=TRUE,
+                     night_min=NULL, night_max=NULL, c13=TRUE, c14=TRUE),
+          mk_nuclear("Drop C8 + C11b + C13 / drop shift minimums + weekend bounds",
+                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=FALSE,
+                     night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
+          mk_nuclear("Drop C8 + C11b + C13 + C10",
+                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
+                     night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
+          mk_nuclear("PTO credits for staff with >4 off/vac days in PP",
+                     night_req=FALSE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
+                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
+                     night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
+          mk_nuclear("Hard coverage only (C1-C7, C11, C12)",
+                     night_req=TRUE,  pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
+                     c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
+                     night_min=NULL, night_max=NULL, c13=FALSE, c14=FALSE)
+        )
+      )
+    },
 
     # ── Build and solve the ILP (HiGHS) ──────────────────────────────────────
     build_and_solve = function(
@@ -604,7 +635,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c10c         = TRUE,          # 8-day density cap: ≤ 6 shifts in any 8-day window
       add_c11b         = TRUE,          # no night stretch in consecutive PPs
       add_c11c         = TRUE,          # weekend hard bounds: MIN_WKND_HARD ≤ total ≤ MAX_WKND_HARD
-      add_c11d         = TRUE,          # night hard bounds:   MIN_NIGHTS_HARD ≤ total nights ≤ MAX_NIGHTS_HARD
+      night_min_hard   = MIN_NIGHTS_HARD, # lower hard bound on per-person night total (NULL = no bound)
+      night_max_hard   = MAX_NIGHTS_HARD, # upper hard bound on per-person night total (NULL = no bound)
       add_c13          = TRUE,
       add_c14          = TRUE,
       add_c15          = TRUE,          # no isolated single shifts
@@ -1069,12 +1101,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C11d: Night hard bounds — MIN_NIGHTS_HARD ≤ Σ_d x[p,d,Night] ≤ MAX_NIGHTS_HARD
-      if (add_c11d) {
+      # ── C11d: Night hard bounds — night_min_hard ≤ Σ_d x[p,d,Night] ≤ night_max_hard
+      if (!is.null(night_min_hard) || !is.null(night_max_hard)) {
         for (pi in seq_len(nP)) {
           cols <- vapply(seq_len(nD), function(di) xidx(pi, di, S_NIGHT), integer(1L))
-          add_con(cols, rep(1L, nD), ">=", MIN_NIGHTS_HARD)
-          add_con(cols, rep(1L, nD), "<=", MAX_NIGHTS_HARD)
+          if (!is.null(night_min_hard))
+            add_con(cols, rep(1L, nD), ">=", night_min_hard)
+          if (!is.null(night_max_hard))
+            add_con(cols, rep(1L, nD), "<=", night_max_hard)
         }
       }
 
