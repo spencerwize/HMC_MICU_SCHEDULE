@@ -132,6 +132,63 @@ server <- function(input, output, session) {
     as.character(n)
   })
 
+  output$stat_nights <- renderUI({
+    req(pipeline())
+    p  <- pipeline()
+    ct <- vapply(STAFF, function(x) length(p$sched$person_nights[[x]]), integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Night Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
+    )
+  })
+
+  output$stat_weekends <- renderUI({
+    req(pipeline())
+    p      <- pipeline()
+    all_d  <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_d <- all_d[weekdays(all_d) %in% c("Saturday", "Sunday")]
+    ct <- vapply(STAFF, function(x) {
+      sh <- p$sched$person_shifts[[x]]
+      if (nrow(sh) == 0L) return(0L)
+      as.integer(sum(sh$date %in% wknd_d))
+    }, integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Weekend Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
+    )
+  })
+
+  output$stat_coverage <- renderUI({
+    req(pipeline())
+    p      <- pipeline()
+    all_ds <- as.character(as.Date(p$sched$dates, origin = "1970-01-01"))
+    sched  <- p$sched$schedule
+    empty  <- function(x) is.null(x) || is.na(x) || x == ""
+    unstaffed <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Night),   logical(1L)))
+    no_roam   <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Roaming), logical(1L)))
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Coverage Gaps"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Unstaffed nights:"),
+        tags$span(as.character(unstaffed),
+          class = if (unstaffed == 0L) "text-success fw-bold" else "text-danger fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("No APP3 days:"),
+        tags$span(as.character(no_roam),
+          class = if (no_roam == 0L) "text-success fw-bold" else "text-warning fw-bold"))
+    )
+  })
+
   output$validation_ui <- renderUI({
     req(pipeline())
     warns <- pipeline()$validation$warnings

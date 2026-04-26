@@ -93,6 +93,15 @@ ui <- page_navbar(
               )
             )
           ),
+          conditionalPanel(
+            "output.schedule_ready",
+            fluidRow(
+              class = "mt-3",
+              column(4, card(card_body(uiOutput("stat_nights")))),
+              column(4, card(card_body(uiOutput("stat_weekends")))),
+              column(4, card(card_body(uiOutput("stat_coverage"))))
+            )
+          ),
           br(),
           conditionalPanel(
             "output.schedule_ready",
