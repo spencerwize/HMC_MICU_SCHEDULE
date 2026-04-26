@@ -71,6 +71,10 @@ N_CANDIDATES     <- 5L
 MIN_NIGHTS_SOFT_TOTAL <- 9L   # total night shifts per person
 MIN_WKND_SOFT_TOTAL   <- 11L  # total Saturday + Sunday shifts per person
 
+# Hard per-person bounds on total night shifts across the full schedule.
+MIN_NIGHTS_HARD <- 8L
+MAX_NIGHTS_HARD <- 12L
+
 # Hard per-person bounds on total weekend (Sat+Sun) shifts across the full schedule.
 MIN_WKND_HARD <- 7L
 MAX_WKND_HARD <- 11L
