@@ -522,6 +522,19 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       score <- min(wknd_ct)
 
+      # Tie-breaker: fewest day-then-night back-to-back transitions.
+      # Count (person, day d) pairs where person has a day shift on d
+      # and a night shift on d+1.  Scaled so it never overrides a 1-unit
+      # gap in the primary metric (assumes < 1000 total transitions).
+      day_night_transitions <- sum(vapply(STAFF, function(p) {
+        day_d   <- self$person_shifts[[p]]$date
+        night_d <- self$person_nights[[p]]
+        if (length(day_d) == 0L || length(night_d) == 0L) return(0L)
+        as.integer(sum(vapply(night_d, function(nd) (nd - 1L) %in% day_d, logical(1L))))
+      }, integer(1L)))
+
+      score <- score - 0.001 * day_night_transitions
+
       # Reset all mutable schedule state back to empty (mirrors initialize())
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
                          Roaming = NA_character_, Night = NA_character_)
