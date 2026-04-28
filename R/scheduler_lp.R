@@ -329,6 +329,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       dates_vec  <- as.Date(self$dates, origin = "1970-01-01")
       wknd_dates <- dates_vec[weekdays(dates_vec) %in% c("Saturday", "Sunday")]
 
+      # Sat/Sun pairs where both days fall within the schedule window
+      sat_di       <- dates_vec[weekdays(dates_vec) == "Saturday"]
+      sat_sun_pair <- sat_di[sat_di + 1L %in% dates_vec]
+      sun_pair     <- sat_sun_pair + 1L
+
       nights_ct <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
       wknd_ct   <- vapply(STAFF, function(p) {
         sh <- self$person_shifts[[p]]
@@ -343,8 +348,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         as.integer(sum(vapply(night_d, function(nd) (nd - 1L) %in% day_d, logical(1L))))
       }, integer(1L)))
 
+      split_wknds <- sum(vapply(STAFF, function(p) {
+        worked <- c(self$person_shifts[[p]]$date, self$person_nights[[p]])
+        sum(xor(sat_sun_pair %in% worked, sun_pair %in% worked))
+      }, integer(1L)))
+
       score <- -(max(nights_ct) - min(nights_ct)) -
                0.1    * (max(wknd_ct) - min(wknd_ct)) -
+               0.01   * split_wknds -
                0.0001 * day_night_transitions
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
