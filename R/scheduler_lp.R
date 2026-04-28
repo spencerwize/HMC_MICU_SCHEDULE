@@ -187,7 +187,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           private$score_candidate_evenness(candidates[[ci]])
         }, numeric(1L))
         best_idx <- which.max(scores)
-        message(sprintf("  Candidate scores [min weekend shifts per person]: [%s]  → best #%d (%.3f)",
+        message(sprintf("  Candidate scores [-(night spread) | -(wknd spread*0.1) | -(transitions*0.0001)]: [%s]  → best #%d (%.3f)",
                         paste(round(scores, 3L), collapse = ", "),
                         best_idx, scores[best_idx]))
 
@@ -319,26 +319,21 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # ── Score candidate after APP3 fill by shift-evenness ─────────────────────
     # Populates the schedule, runs greedy APP3 fill, then resets to empty.
     # Three-level score (all encoded in one float, each level subordinate to the one above):
-    #   L1 primary  : max(min weekend shifts across staff)          — integer, range [0,14]
-    #   L2 secondary: -(max - min weekend shifts)                   — scale 0.05, max ±0.7
-    #   L3 tertiary : -count of day→night back-to-back transitions  — scale 0.0001, max ±0.1
+    #   L1 primary  : -(max - min night shifts)   — tighter spread is better; range [-4, 0]
+    #   L2 secondary: -(max - min weekend shifts) — scale 0.1,    max ±0.4 < 1 unit of L1
+    #   L3 tertiary : -day→night transitions       — scale 0.0001, max ±0.1 < 0.1 unit of L2
     score_candidate_evenness = function(res) {
       private$populate_from_solution(res)
       private$fill_roaming_pass()
 
-      dates_vec   <- as.Date(self$dates, origin = "1970-01-01")
-      wknd_dates  <- dates_vec[weekdays(dates_vec) %in% c("Saturday", "Sunday")]
-      fri_dates   <- dates_vec[weekdays(dates_vec) == "Friday"]
+      dates_vec  <- as.Date(self$dates, origin = "1970-01-01")
+      wknd_dates <- dates_vec[weekdays(dates_vec) %in% c("Saturday", "Sunday")]
 
-      nights_ct  <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
-      wknd_ct    <- vapply(STAFF, function(p) {
+      nights_ct <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
+      wknd_ct   <- vapply(STAFF, function(p) {
         sh <- self$person_shifts[[p]]
         if (nrow(sh) == 0L) return(0L)
         as.integer(sum(sh$date %in% wknd_dates))
-      }, integer(1L))
-      fri_night_ct <- vapply(STAFF, function(p) {
-        nt <- self$person_nights[[p]]
-        as.integer(sum(nt %in% fri_dates))
       }, integer(1L))
 
       day_night_transitions <- sum(vapply(STAFF, function(p) {
@@ -348,8 +343,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         as.integer(sum(vapply(night_d, function(nd) (nd - 1L) %in% day_d, logical(1L))))
       }, integer(1L)))
 
-      score <- min(wknd_ct) -
-               0.05   * (max(wknd_ct) - min(wknd_ct)) -
+      score <- -(max(nights_ct) - min(nights_ct)) -
+               0.1    * (max(wknd_ct) - min(wknd_ct)) -
                0.0001 * day_night_transitions
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
