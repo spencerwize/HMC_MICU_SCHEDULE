@@ -535,29 +535,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       srsoff <- isoff + nISO
       srsidx <- function(p, d) srsoff + (p - 1L) * nD + d
 
-      # Night-spread auxiliaries:
-      #   hn[p,w]  — 1 if person p has any night shift in PP w  (continuous [0,1])
-      #   bp[p,k]  — min(hn[p,w1], hn[p,w2]) for the k-th (w1<w2) PP pair
-      # Objective bonus: +NIGHT_SPREAD_W * (w2-w1) * bp[p,k]
-      # Nights placed far apart in the schedule earn a higher bonus than
-      # nights clustered in adjacent pay periods.
-      nPP     <- nrow(PAY_PERIODS)
-      pp_pairs <- do.call(rbind, lapply(seq_len(nPP - 1L), function(w1)
-                   cbind(w1, seq.int(w1 + 1L, nPP))))
-      nPairs  <- if (nPP >= 2L) nrow(pp_pairs) else 0L
-      nHN     <- nP * nPP
-      hnoff   <- srsoff + nSRS
-      hnidx   <- function(p, w) hnoff + (p - 1L) * nPP + w
-      nBP     <- nP * nPairs
-      bpoff   <- hnoff + nHN
-      bpidx   <- function(p, k) bpoff + (p - 1L) * nPairs + k
-
       # Soft-minimum shortfall variables (continuous >= 0):
       #   ns_short[p] = max(0, MIN_NIGHTS_SOFT_TOTAL  - actual nights for p)
       #   ws_short[p] = max(0, MIN_WKND_SOFT_TOTAL    - actual Sat+Sun shifts for p)
       # Each is penalised in the objective; the solver treats them as soft floors.
       nNSSHORT  <- nP
-      nsshoff   <- bpoff + nBP
+      nsshoff   <- srsoff + nSRS
       nsshidx   <- function(p) nsshoff + p
       nWSSHORT  <- nP
       wsshoff   <- nsshoff + nNSSHORT
@@ -569,14 +552,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       ssoff  <- wsshoff + nWSSHORT
       ssidx  <- function(p, d) ssoff + (p - 1L) * nD + d
 
-      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS + nHN + nBP +
+      nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS +
             nNSSHORT + nWSSHORT + nSS
 
       # Variable bounds and types
       lb    <- numeric(nV)
       ub    <- c(rep(1, nX), rep(as.double(nD), nF), rep(1, nW),
                  rep(1, nNS3), rep(1, nNS4), rep(1, nWS3), rep(1, nWS4),
-                 rep(1, nISO), rep(1, nSRS), rep(1, nHN), rep(1, nBP),
+                 rep(1, nISO), rep(1, nSRS),
                  rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
                  rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT),
                  rep(1, nSS))
@@ -584,7 +567,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
                  rep("I", nISO),
                  rep("I", nSRS),
-                 rep("C", nHN + nBP + nNSSHORT + nWSSHORT + nSS))
+                 rep("C", nNSSHORT + nWSSHORT + nSS))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -624,14 +607,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       if (nSRS > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD)) obj[srsidx(p, d)] <- -0.001
-      # Night-spread bonus: bp[p,k]=1 iff person has nights in BOTH PP w1 and w2.
-      # Bonus scales with PP distance so spreading nights across the schedule is
-      # preferred over clustering them in adjacent pay periods.
-      NIGHT_SPREAD_W <- 0.08
-      if (nBP > 0L)
-        for (p in seq_len(nP))
-          for (k in seq_len(nPairs))
-            obj[bpidx(p, k)] <- NIGHT_SPREAD_W * (pp_pairs[k, 2L] - pp_pairs[k, 1L])
       # Soft-minimum penalties: penalise each unit a person falls below the
       # schedule-wide night/weekend floor.  Penalty > base assignment weight so
       # the solver strongly prefers reaching the minimum before going above it.
@@ -1162,34 +1137,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C_hn: has_night_in_pp — hn[p,w] ≤ Σ_{d∈PP_w} x[p,d,Night] ─────────────
-      # Maximising bp pulls hn to 1 whenever any night x is 1 in that PP.
-      if (nHN > 0L) {
-        for (pi in seq_len(nP)) {
-          for (w in seq_len(nPP)) {
-            pp_d_idx <- which(dates_vec >= PAY_PERIODS$start[w] &
-                              dates_vec <= PAY_PERIODS$end[w])
-            if (length(pp_d_idx) > 0L) {
-              night_cols <- vapply(pp_d_idx, function(di) xidx(pi, di, S_NIGHT), integer(1L))
-              add_con(c(hnidx(pi, w), night_cols),
-                      c(1L, rep(-1L, length(night_cols))), "<=", 0)
-            } else {
-              add_con(hnidx(pi, w), 1L, "=", 0)
-            }
-          }
-        }
-      }
-
-      # ── C_bp: both_pp — bp[p,k] ≤ hn[p,w1]  and  bp[p,k] ≤ hn[p,w2] ──────────
-      if (nBP > 0L) {
-        for (pi in seq_len(nP)) {
-          for (k in seq_len(nPairs)) {
-            w1 <- pp_pairs[k, 1L]; w2 <- pp_pairs[k, 2L]
-            add_con(c(bpidx(pi, k), hnidx(pi, w1)), c(1L, -1L), "<=", 0)
-            add_con(c(bpidx(pi, k), hnidx(pi, w2)), c(1L, -1L), "<=", 0)
-          }
-        }
-      }
 
       # ── C_ns: Night soft-minimum — ns_short[p] + Σ_d x[p,d,Night] ≥ MIN ────────
       # ns_short[p] = max(0, MIN_NIGHTS_SOFT_TOTAL - actual nights).
@@ -1219,7 +1166,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── Assemble and solve ────────────────────────────────────────────────────
-      nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nHN + nBP + nNSSHORT + nWSSHORT
+      nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nNSSHORT + nWSSHORT
       message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
                       nX, nCont, n_con))
 
