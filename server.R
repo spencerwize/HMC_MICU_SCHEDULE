@@ -373,6 +373,7 @@ server <- function(input, output, session) {
     )
 
     # Make cell colour helper
+    show_off <- isTRUE(input$grid_show_off)
     make_col <- function(person_name) {
       colDef(
         name   = person_name,
@@ -380,13 +381,17 @@ server <- function(input, output, session) {
         style  = function(value) {
           if (is.null(value) || is.na(value) || !nzchar(value))
             return(list(background = "#FAFAFA"))
+          if (!show_off && value %in% c("OFF", "VAC", "CME"))
+            return(list(background = "#FAFAFA"))
           bg <- role_colors[value]
           if (is.na(bg)) bg <- "#FAFAFA"
           list(background = bg, fontWeight = "bold",
                fontSize = "11px", textAlign = "center")
         },
         cell   = function(value) {
-          if (is.null(value) || is.na(value)) "" else value
+          if (is.null(value) || is.na(value)) return("")
+          if (!show_off && value %in% c("OFF", "VAC", "CME")) return("")
+          value
         }
       )
     }

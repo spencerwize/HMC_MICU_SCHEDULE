@@ -102,6 +102,62 @@ validate_schedule <- function(sched_obj, time_off, targets) {
     }
   }
 
+  # ── C10c: 8-day density cap (max 6 shifts in any 8-day window) ───────────
+  for (person in STAFF) {
+    all_worked <- sort(c(sched_obj$person_shifts[[person]]$date,
+                         sched_obj$person_nights[[person]]))
+    for (i in seq_along(dates)) {
+      d_start <- as_date(dates[i])
+      d_end   <- d_start + 7L
+      if (d_end > as_date(dates[length(dates)])) break
+      n_in_window <- sum(all_worked >= d_start & all_worked <= d_end)
+      if (n_in_window > 6L) {
+        errors <- c(errors, sprintf(
+          "%s: %d shifts in 8-day window %s–%s (max 6)",
+          person, n_in_window, as.character(d_start), as.character(d_end)))
+      }
+    }
+  }
+
+  # ── C11b: no night stretch starting in consecutive PPs ───────────────────
+  for (person in STAFF) {
+    nights <- sort(sched_obj$person_nights[[person]])
+    if (length(nights) == 0L) next
+    # Identify stretch-start dates: night on d with no night on d-1
+    stretch_starts <- vapply(nights, function(nd) {
+      nd <- as_date(nd)
+      !(nd - 1L) %in% nights
+    }, logical(1L))
+    start_dates <- nights[stretch_starts]
+    start_pps   <- vapply(start_dates, function(d) get_pp(as_date(d)), character(1L))
+    for (k in seq_len(nrow(PAY_PERIODS) - 1L)) {
+      pp_k  <- PAY_PERIODS$name[k]
+      pp_k1 <- PAY_PERIODS$name[k + 1L]
+      n_starts <- sum(start_pps %in% c(pp_k, pp_k1), na.rm = TRUE)
+      if (n_starts > 1L) {
+        errors <- c(errors, sprintf(
+          "%s: night stretches start in consecutive PPs %s and %s",
+          person, pp_k, pp_k1))
+      }
+    }
+  }
+
+  # ── C11c: weekend hard bounds ─────────────────────────────────────────────
+  wknd_dates <- dates[weekdays(as_date(dates)) %in% c("Saturday", "Sunday")]
+  for (person in STAFF) {
+    sh     <- sched_obj$person_shifts[[person]]
+    nights <- sched_obj$person_nights[[person]]
+    worked <- sort(c(sh$date, nights))
+    n_wknd <- sum(worked %in% wknd_dates)
+    if (n_wknd < MIN_WKND_HARD) {
+      errors <- c(errors, sprintf(
+        "%s: only %d weekend shifts (min %d)", person, n_wknd, MIN_WKND_HARD))
+    } else if (n_wknd > MAX_WKND_HARD) {
+      errors <- c(errors, sprintf(
+        "%s: %d weekend shifts exceeds max %d", person, n_wknd, MAX_WKND_HARD))
+    }
+  }
+
   # ── Soft: day-before-night flag ───────────────────────────────────────────
   for (d in dates[-length(dates)]) {
     d <- as_date(d)

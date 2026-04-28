@@ -310,197 +310,18 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
   # ── Private implementation ─────────────────────────────────────────────────
   private = list(
 
-    # ── Score a candidate solution (higher = better) ──────────────────────────
-    # Works directly on the raw result list from build_and_solve — no need to
-    # populate schedule data structures.  Four criteria:
-    #   1. Target attainment  — quadratic penalty for each missed shift per PP
-    #   2. Night fairness     — penalty proportional to SD of night counts
-    #   3. Work-run quality   — reward 3/4-day blocks, penalise 1/2-day runs
-    #   4. Night-pack quality — reward 3-night packs, penalise 1/4-night runs
-    score_solution = function(res) {
-      sol       <- res$sol
-      nP        <- res$nP
-      nD        <- res$nD
-      xidx      <- res$xidx
-      dates_vec <- res$dates_vec
-      S_NIGHT   <- 4L
-      score     <- 0.0
-
-      streak_lengths <- function(v) {
-        r <- rle(as.integer(v))
-        r$lengths[r$values == 1L]
-      }
-
-      # ---- 1. Target attainment -----------------------------------------------
-      for (pi in seq_len(nP)) {
-        person <- STAFF[pi]
-        for (ppi in seq_len(nrow(PAY_PERIODS))) {
-          pp_d  <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
-          di_pp <- which(dates_vec %in% pp_d)
-          if (length(di_pp) == 0L) next
-          actual <- sum(vapply(di_pp, function(di)
-            sum(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]), numeric(1L))),
-            numeric(1L)))
-          sm        <- self$targets[[person]][[PAY_PERIODS$name[ppi]]]$sched_target
-          shortfall <- max(0L, sm - actual)
-          score     <- score - 10.0 * shortfall^2
-        }
-      }
-
-      # ---- 2. Night fairness --------------------------------------------------
-      nights <- vapply(seq_len(nP), function(pi)
-        sum(vapply(seq_len(nD), function(di)
-          round(sol[xidx(pi, di, S_NIGHT)]), numeric(1L))),
-        numeric(1L))
-      if (nP > 1L) score <- score - 5.0 * sd(nights)
-
-      # ---- 3 & 4. Run / pack quality ------------------------------------------
-      # Isolated single shifts/nights are heavily penalised so the scorer
-      # strongly prefers any candidate that avoids them.
-      run_w   <- c("1" = -15.0, "2" = -0.5, "3" = 2.0, "4" =  1.0)
-      night_w <- c("1" = -12.0, "2" =  0.3, "3" = 1.0, "4" = -0.5)
-
-      for (pi in seq_len(nP)) {
-        # Work run quality (all slots)
-        work <- vapply(seq_len(nD), function(di)
-          as.integer(any(vapply(1:4, function(s) round(sol[xidx(pi, di, s)]) == 1L,
-                                logical(1L)))),
-          integer(1L))
-        for (L in streak_lengths(work))
-          score <- score + run_w[min(L, 4L)]
-
-        # Night pack quality
-        nv <- vapply(seq_len(nD), function(di)
-          as.integer(round(sol[xidx(pi, di, S_NIGHT)])), integer(1L))
-        for (L in streak_lengths(nv))
-          score <- score + night_w[min(L, 4L)]
-      }
-
-      # ---- 5. APP3 fill potential -----------------------------------------------
-      # Simulate greedy Phase 2 fill and reward solutions that enable more fills.
-      score <- score + 4.0 * private$simulate_roaming_fill(res)
-
-      score
-    },
-
-    # ── Simulate Phase 2 greedy APP3 fill (for candidate scoring) ─────────────
-    # Mirrors fill_roaming_pass logic but operates on the raw ILP result without
-    # touching self$schedule.  Returns the number of APP3 slots that would be
-    # filled, used as a score criterion to select among candidates.
-    simulate_roaming_fill = function(res) {
-      sol       <- res$sol
-      nP        <- res$nP
-      nD        <- res$nD
-      xidx      <- res$xidx
-      dates_vec <- res$dates_vec
-      S_NIGHT   <- 4L
-
-      # working[pi, di] = TRUE if person pi works on day di in this solution
-      working <- matrix(FALSE, nP, nD)
-      for (pi in seq_len(nP))
-        for (di in seq_len(nD))
-          for (s in 1:4)
-            if (isTRUE(round(sol[xidx(pi, di, s)]) == 1L)) {
-              working[pi, di] <- TRUE; break
-            }
-
-      # app3_taken[di] = TRUE if Roaming slot already filled by ILP
-      app3_taken <- logical(nD)
-      for (di in seq_len(nD))
-        for (pi in seq_len(nP))
-          if (isTRUE(round(sol[xidx(pi, di, 3L)]) == 1L)) {
-            app3_taken[di] <- TRUE; break
-          }
-
-      # Build pp_counts from ILP solution
-      pp_counts <- setNames(
-        lapply(STAFF, function(p) setNames(integer(nrow(PAY_PERIODS)), PAY_PERIODS$name)),
-        STAFF)
-      for (pi in seq_len(nP)) {
-        person <- STAFF[pi]
-        for (di in seq_len(nD)) {
-          if (!working[pi, di]) next
-          pp <- get_pp(dates_vec[di])
-          if (!is.na(pp))
-            pp_counts[[person]][[pp]] <- pp_counts[[person]][[pp]] + 1L
-        }
-      }
-
-      # Precompute fairness stats (nights + weekend shifts) per person
-      nights_ct  <- vapply(seq_len(nP), function(pi)
-        sum(vapply(seq_len(nD), function(di)
-          as.integer(isTRUE(round(sol[xidx(pi, di, S_NIGHT)]) == 1L)), integer(1L))),
-        integer(1L))
-      weekend_ct <- vapply(seq_len(nP), function(pi)
-        sum(vapply(seq_len(nD), function(di)
-          as.integer(working[pi, di] &&
-            weekdays(dates_vec[di]) %in% c("Saturday", "Sunday")),
-          integer(1L))),
-        integer(1L))
-
-      n_filled <- 0L
-
-      for (di in seq_len(nD)) {
-        if (app3_taken[di]) next
-        d  <- dates_vec[di]
-        pp <- get_pp(d)
-        if (is.na(pp)) next
-
-        candidates <- integer(0)
-        scores_c   <- numeric(0)
-
-        for (pi in seq_len(nP)) {
-          person <- STAFF[pi]
-          tgt    <- self$targets[[person]][[pp]]
-          if (is.null(tgt)) next
-          deficit <- tgt$sched_target - pp_counts[[person]][[pp]]
-          if (deficit <= 0L) next
-
-          # Availability
-          pdata <- self$time_off[[person]]
-          if (nrow(pdata) > 0 &&
-              any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))) next
-
-          # Not already working this day
-          if (working[pi, di]) next
-
-          # C7/C7b: no day shift within 2 days after a night
-          if (di > 1L && isTRUE(round(sol[xidx(pi, di - 1L, S_NIGHT)]) == 1L)) next
-          if (di > 2L && isTRUE(round(sol[xidx(pi, di - 2L, S_NIGHT)]) == 1L)) next
-
-          # C10: consecutive days
-          run <- 1L; k <- 1L
-          while (k <= 4L && (di - k) >= 1L && working[pi, di - k]) {
-            run <- run + 1L; k <- k + 1L
-          }
-          k <- 1L
-          while (k <= 4L && (di + k) <= nD && working[pi, di + k]) {
-            run <- run + 1L; k <- k + 1L
-          }
-          if (run > 4L) next
-
-          cand_score <- deficit * 100L + nights_ct[pi] * 10L + weekend_ct[pi]
-          candidates <- c(candidates, pi)
-          scores_c   <- c(scores_c, cand_score)
-        }
-
-        if (length(candidates) == 0L) next
-
-        best_pi             <- candidates[which.max(scores_c)]
-        app3_taken[di]      <- TRUE
-        working[best_pi, di] <- TRUE
-        pp_counts[[STAFF[best_pi]]][[pp]] <- pp_counts[[STAFF[best_pi]]][[pp]] + 1L
-        n_filled            <- n_filled + 1L
-      }
-
-      n_filled
+    # ── Availability helper ───────────────────────────────────────────────────
+    is_blocked = function(person, d) {
+      pdata <- self$time_off[[person]]
+      nrow(pdata) > 0 && any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))
     },
 
     # ── Score candidate after APP3 fill by shift-evenness ─────────────────────
-    # Populates the schedule, runs greedy APP3 fill, measures how evenly
-    # Saturday shifts and night shifts are spread across all staff, then resets
-    # the schedule to empty so the next candidate can be evaluated cleanly.
-    # Returns -(SD_nights + SD_saturdays): higher score = more even distribution.
+    # Populates the schedule, runs greedy APP3 fill, then resets to empty.
+    # Three-level score (all encoded in one float, each level subordinate to the one above):
+    #   L1 primary  : max(min weekend shifts across staff)          — integer, range [0,14]
+    #   L2 secondary: -(max - min weekend shifts)                   — scale 0.05, max ±0.7
+    #   L3 tertiary : -count of day→night back-to-back transitions  — scale 0.0001, max ±0.1
     score_candidate_evenness = function(res) {
       private$populate_from_solution(res)
       private$fill_roaming_pass()
@@ -520,12 +341,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         as.integer(sum(nt %in% fri_dates))
       }, integer(1L))
 
-      score <- min(wknd_ct)
-
-      # Tie-breaker: fewest day-then-night back-to-back transitions.
-      # Count (person, day d) pairs where person has a day shift on d
-      # and a night shift on d+1.  Scaled so it never overrides a 1-unit
-      # gap in the primary metric (assumes < 1000 total transitions).
       day_night_transitions <- sum(vapply(STAFF, function(p) {
         day_d   <- self$person_shifts[[p]]$date
         night_d <- self$person_nights[[p]]
@@ -533,7 +348,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         as.integer(sum(vapply(night_d, function(nd) (nd - 1L) %in% day_d, logical(1L))))
       }, integer(1L)))
 
-      score <- score - 0.001 * day_night_transitions
+      score <- min(wknd_ct) -
+               0.05   * (max(wknd_ct) - min(wknd_ct)) -
+               0.0001 * day_night_transitions
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
@@ -1498,18 +1315,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       nP        <- length(STAFF)
       nD        <- length(dates_vec)
 
-      is_blocked <- function(person, d) {
-        pdata <- self$time_off[[person]]
-        nrow(pdata) > 0 &&
-          any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))
-      }
-
       issues <- character(0)
 
       # 1. Per-day: count available staff; flag days where < 2 are free
       for (di in seq_len(nD)) {
         d       <- dates_vec[di]
-        n_avail <- sum(vapply(STAFF, function(p) !is_blocked(p, d), logical(1L)))
+        n_avail <- sum(vapply(STAFF, function(p) !private$is_blocked(p, d), logical(1L)))
         if (n_avail < 3L) {
           issues <- c(issues, sprintf(
             "[COVERAGE] %s (%s): only %d/%d staff available — need >= 3 for APP1+APP2+Night",
@@ -1524,7 +1335,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_d     <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           pp_d     <- pp_d[pp_d %in% dates_vec]
           if (length(pp_d) == 0L) next
-          n_blocked <- sum(vapply(pp_d, function(d) is_blocked(person, d), logical(1L)))
+          n_blocked <- sum(vapply(pp_d, function(d) private$is_blocked(person, d), logical(1L)))
           n_avail   <- length(pp_d) - n_blocked
           target    <- self$targets[[person]][[pp_name]]$sched_target
           if (!is.null(target) && target > n_avail) {
@@ -1537,7 +1348,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       # 3. Per-person: flag anyone with no window of >= 2 consecutive free days
       for (person in STAFF) {
-        free    <- vapply(dates_vec, function(d) !is_blocked(person, d), logical(1L))
+        free    <- vapply(dates_vec, function(d) !private$is_blocked(person, d), logical(1L))
         max_run <- 0L; run <- 0L
         for (f in free) {
           if (f) { run <- run + 1L; if (run > max_run) max_run <- run } else run <- 0L
@@ -1573,12 +1384,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     fill_roaming_pass = function() {
       # Use explicit index iteration to guarantee Date class is preserved on each d
       dates_vec <- sort(as.Date(names(self$schedule)))
-
-      is_blocked_p <- function(person, d) {
-        pdata <- self$time_off[[person]]
-        nrow(pdata) > 0 &&
-          any(pdata$date == d & pdata$type %in% c("off", "vac", "cme"))
-      }
 
       is_working_p <- function(person, d) {
         day <- self$schedule[[format(d, "%Y-%m-%d")]]
@@ -1635,7 +1440,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (is.null(tgt)) next
           deficit <- tgt$sched_target - self$pp_counts[[person]][[pp]]
           if (!isTRUE(deficit > 0L)) next
-          if (is_blocked_p(person, d)) next
+          if (private$is_blocked(person, d)) next
           if (is_working_p(person, d)) next
           if (had_night_recent(person, d)) next
           if (would_exceed_consec(person, d)) next
