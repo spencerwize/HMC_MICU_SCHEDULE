@@ -47,13 +47,6 @@ ui <- page_navbar(
           "Select the pay-period sheet from the Google Sheet."
         ),
         hr(),
-        numericInput("n_candidates", "Schedule candidates:",
-          value = N_CANDIDATES, min = 1L, max = 20L, step = 1L
-        ),
-        tags$small(class = "text-muted",
-          "Candidates per tier. Each adds one full ILP solve — keep low for speed."
-        ),
-        br(),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
@@ -82,23 +75,8 @@ ui <- page_navbar(
             tags$li("Fixed holiday assignments pre-seeded")
           ),
           hr(),
-          conditionalPanel(
-            "output.schedule_ready",
-            card(
-              card_header("Staffing Balance by Pay Period"),
-              card_body(
-                p(class = "text-muted small",
-                  strong("Demand"), " = total shifts to schedule (Σ per-person targets).  ",
-                  strong("Avail Days"), " = total person-days staff can work (upper bound on assignable shifts).  ",
-                  strong("Slack"), " = Avail Days − Demand.  Negative slack means the pay period is mathematically impossible."
-                ),
-                reactableOutput("balance_table")
-              )
-            ),
-            br()
-          ),
           fluidRow(
-            column(3,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_days"),   class = "text-primary mb-0"),
@@ -106,38 +84,28 @@ ui <- page_navbar(
                 )
               )
             ),
-            column(3,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_shifts"), class = "text-primary mb-0"),
                   p("Total Shifts Scheduled",    class = "text-muted small")
                 )
               )
-            ),
-            column(3,
-              card(class = "text-center",
-                card_body(
-                  h2(textOutput("stat_errors"), class = "text-danger mb-0"),
-                  p("Hard Constraint Errors",    class = "text-muted small")
-                )
-              )
-            ),
-            column(3,
-              card(class = "text-center",
-                card_body(
-                  uiOutput("stat_tier"),
-                  p("Relaxation Tier Used",      class = "text-muted small")
-                )
-              )
+            )
+          ),
+          conditionalPanel(
+            "output.schedule_ready",
+            fluidRow(
+              class = "mt-3",
+              column(4, card(card_body(uiOutput("stat_nights")))),
+              column(4, card(card_body(uiOutput("stat_weekends")))),
+              column(4, card(card_body(uiOutput("stat_coverage"))))
             )
           ),
           br(),
           conditionalPanel(
             "output.schedule_ready",
-            card(
-              card_header("Validation Results"),
-              card_body(uiOutput("validation_ui"))
-            )
+            uiOutput("validation_ui")
           ),
           br(),
           conditionalPanel(
@@ -271,7 +239,7 @@ ui <- page_navbar(
           plotlyOutput("chart_nights", height = "320px")
         ),
         column(6,
-          h4("Roaming Shifts per Person"),
+          h4("Weekend Shifts per Person"),
           plotlyOutput("chart_roaming", height = "320px")
         )
       ),

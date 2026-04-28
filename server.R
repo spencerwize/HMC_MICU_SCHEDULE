@@ -69,11 +69,10 @@ server <- function(input, output, session) {
 
       setProgress(0.25, detail = "Computing targets…")
       targets <- compute_targets(time_off)
-      balance <- staffing_balance_df(targets)
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
       sched <- SchedulerLP$new(time_off, targets)
-      sched$run(n_candidates = as.integer(input$n_candidates))
+      sched$run()
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
@@ -90,7 +89,6 @@ server <- function(input, output, session) {
         sched      = sched,
         time_off   = time_off,
         targets    = targets,
-        balance    = balance,
         validation = validation,
         tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
@@ -134,80 +132,73 @@ server <- function(input, output, session) {
     as.character(n)
   })
 
-  output$stat_errors <- renderText({
+  output$stat_nights <- renderUI({
     req(pipeline())
-    as.character(length(pipeline()$validation$errors))
-  })
-
-  output$stat_tier <- renderUI({
-    req(pipeline())
-    tu  <- pipeline()$tier_used
-    idx <- if (is.null(tu)) NA_integer_ else tu$index
-    lbl <- if (is.null(tu)) "—" else sprintf("%d / 18", idx)
-    cls <- if (is.na(idx))    "text-secondary"
-           else if (idx <= 2) "text-success"
-           else if (idx <= 5) "text-warning"
-           else               "text-danger"
+    p  <- pipeline()
+    ct <- vapply(STAFF, function(x) length(p$sched$person_nights[[x]]), integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
     tagList(
-      h2(lbl, class = paste(cls, "mb-0")),
-      if (!is.null(tu))
-        tags$small(class = "text-muted", tu$label)
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Night Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
     )
   })
 
-  output$balance_table <- renderReactable({
+  output$stat_weekends <- renderUI({
     req(pipeline())
-    df <- pipeline()$balance
-    status_colors <- c(IMPOSSIBLE = "#FFC7CE", TIGHT = "#FFD966", OK = "#92D050")
-    reactable(
-      df,
-      columns = list(
-        PP         = colDef(name = "Pay Period", minWidth = 85),
-        Days       = colDef(name = "Days",       minWidth = 55, align = "center"),
-        Capacity   = colDef(name = "Slots",      minWidth = 60, align = "center"),
-        Demand     = colDef(name = "Demand",     minWidth = 70, align = "center"),
-        Staff_Days = colDef(name = "Avail Days", minWidth = 85, align = "center"),
-        Slack      = colDef(name = "Slack",      minWidth = 65, align = "center"),
-        Status     = colDef(name = "Status",     minWidth = 100, align = "center",
-          cell = function(value) {
-            bg <- status_colors[[value]]
-            tags$span(
-              style = sprintf("background:%s;padding:2px 10px;border-radius:3px;font-weight:600;", bg),
-              value
-            )
-          }
-        )
-      ),
-      striped = TRUE, highlight = TRUE, bordered = TRUE,
-      defaultPageSize = nrow(df), pagination = FALSE, compact = TRUE
+    p      <- pipeline()
+    all_d  <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_d <- all_d[weekdays(all_d) %in% c("Saturday", "Sunday")]
+    ct <- vapply(STAFF, function(x) {
+      sh <- p$sched$person_shifts[[x]]
+      if (nrow(sh) == 0L) return(0L)
+      as.integer(sum(sh$date %in% wknd_d))
+    }, integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Weekend Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
+    )
+  })
+
+  output$stat_coverage <- renderUI({
+    req(pipeline())
+    p      <- pipeline()
+    all_ds <- as.character(as.Date(p$sched$dates, origin = "1970-01-01"))
+    sched  <- p$sched$schedule
+    empty  <- function(x) is.null(x) || is.na(x) || x == ""
+    unstaffed <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Night),   logical(1L)))
+    no_roam   <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Roaming), logical(1L)))
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Coverage Gaps"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Unstaffed nights:"),
+        tags$span(as.character(unstaffed),
+          class = if (unstaffed == 0L) "text-success fw-bold" else "text-danger fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("No APP3 days:"),
+        tags$span(as.character(no_roam),
+          class = if (no_roam == 0L) "text-success fw-bold" else "text-warning fw-bold"))
     )
   })
 
   output$validation_ui <- renderUI({
     req(pipeline())
-    v <- pipeline()$validation
-    errs  <- v$errors
-    warns <- v$warnings
-
-    err_ui <- if (length(errs) == 0) {
-      tags$div(class = "alert alert-success",
-        icon("check-circle"), " No hard constraint violations.")
-    } else {
-      tags$div(class = "alert alert-danger",
-        tags$strong(sprintf("%d constraint error(s):", length(errs))),
-        tags$ul(lapply(errs, tags$li))
-      )
-    }
-
-    warn_ui <- if (length(warns) == 0) NULL else {
-      tags$div(class = "alert alert-warning mt-2",
-        tags$strong(sprintf("%d warning(s):", length(warns))),
-        tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
-        if (length(warns) > 20)
-          tags$li(sprintf("… and %d more", length(warns) - 20))
-      )
-    }
-    tagList(err_ui, warn_ui)
+    warns <- pipeline()$validation$warnings
+    if (length(warns) == 0) return(NULL)
+    tags$div(class = "alert alert-warning",
+      tags$strong(sprintf("%d warning(s):", length(warns))),
+      tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
+      if (length(warns) > 20)
+        tags$li(sprintf("… and %d more", length(warns) - 20))
+    )
   })
 
   # ── Download Excel ────────────────────────────────────────────────────────
@@ -509,20 +500,34 @@ server <- function(input, output, session) {
 
   output$chart_roaming <- renderPlotly({
     req(pipeline())
-    p <- pipeline()
+    p         <- pipeline()
+    all_dates <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_dates <- all_dates[weekdays(all_dates) %in% c("Saturday", "Sunday")]
     df <- data.frame(
-      person = STAFF,
-      roam   = sapply(STAFF, function(x)
-        sum(p$sched$person_shifts[[x]]$slot == "Roaming")),
+      person  = STAFF,
+      weekend = sapply(STAFF, function(x) {
+        sh <- p$sched$person_shifts[[x]]
+        if (nrow(sh) == 0L) return(0L)
+        sum(sh$date %in% wknd_dates)
+      }),
       stringsAsFactors = FALSE
     )
-    plot_ly(df, x = ~person, y = ~roam, type = "bar",
-            marker = list(color = "#92D050",
-                          line = list(color = "#5A9E2F", width = 1.5))) %>%
+    plot_ly(df, x = ~person, y = ~weekend, type = "bar",
+            marker = list(color = "#2E75B6",
+                          line = list(color = "#1A4D8C", width = 1.5))) %>%
       layout(
         xaxis = list(title = "", tickangle = -30),
-        yaxis = list(title = "Roaming Shifts"),
-        showlegend = FALSE
+        yaxis = list(title = "Weekend Shifts",
+                     range = list(0, max(20, max(df$weekend) + 1))),
+        showlegend = FALSE,
+        shapes = list(
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MIN_WKND_HARD, y1 = MIN_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5)),
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MAX_WKND_HARD, y1 = MAX_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5))
+        )
       ) %>%
       config(displayModeBar = FALSE)
   })

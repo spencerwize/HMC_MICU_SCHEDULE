@@ -307,10 +307,15 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
           }
           writeFormula(wb, "Calendar", x = fml,
             startRow = role_row, startCol = col)
+          # Yellow dotted border when APP3 slot is empty this day (schedule-level)
+          app3_empty <- is.na(sched_obj$schedule[[ds]]$Roaming)
           addStyle(wb, "Calendar",
             mk(fg = bg_r, bold = TRUE, font_color = F_BLUE, size = 10,
                halign = "center", valign = "center",
-               border = "All", border_color = "#D0D0D0", wrap = TRUE),
+               border = "All",
+               border_color = if (app3_empty) "#FFD700" else "#D0D0D0",
+               border_style = if (app3_empty) "dotted"  else "thin",
+               wrap = TRUE),
             rows = role_row, cols = col)
         }
       }
@@ -345,6 +350,24 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
     rows = cal_row, cols = 2:8)
   setRowHeights(wb, "Calendar", rows = cal_row, heights = 15.75)
+
+  # Conditional formatting for role cells — fires on formula result so updates
+  # dynamically when the staff dropdown in C2 changes.
+  # CF only overrides fill/font; the static dotted border for empty APP3 days
+  # is preserved since these CF styles don't include a border definition.
+  cf_end <- cal_row
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "APP",
+    style = createStyle(fgFill = C_GREEN, fontColour = F_BLUE,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "Night",
+    style = createStyle(fgFill = C_NIGHT, fontColour = F_NAVY,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "OFF",
+    style = createStyle(fgFill = C_PINK, fontColour = F_RED,
+                        textDecoration = "bold", halign = "center"))
 
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 2 · Summary
@@ -388,6 +411,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       targets[[person]][[pp]]$credited))
     pdata   <- time_off[[person]]
     n_vac   <- sum(pdata$type == "vac", na.rm = TRUE)
+    n_off   <- sum(pdata$type == "off", na.rm = TRUE)
     n_pto   <- 0L
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
@@ -408,7 +432,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       n_wknd   = sum(is_weekend(shifts$date)) + sum(is_weekend(nights)),
       n_cred   = n_cred,
       n_total  = nrow(shifts) + length(nights) + n_cred,
-      n_vac    = n_vac,
+      n_reqoff = n_vac + n_off,
       n_pto    = n_pto,
       n_bump   = n_bump)
   })
@@ -441,7 +465,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Night Shifts",             "n_night",  "#FFFFFF",  FALSE),
     list("APP 3 Shifts",             "n_roam",   C_GRAY_LT, FALSE),
     list("Weekend Shifts",           "n_wknd",   "#FFFFFF",  FALSE),
-    list("Vacation Days",            "n_vac",    C_PEACH,    FALSE),
+    list("Req. Off Days",             "n_reqoff", C_PEACH,    FALSE),
     list("Shortfall (shift-days)",   "n_bump",   "#FFFFFF",  FALSE))
 
   for (ov in ovr_rows) {
@@ -458,9 +482,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       cfc    <- F_NAVY
       cbold  <- FALSE
       if (cred_flag  && val > 0) { cbg <- C_ORANGE; cfc <- F_WHITE; cbold <- TRUE }
-      if (key == "n_pto"  && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;  cbold <- TRUE }
-      if (key == "n_bump" && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000"; cbold <- TRUE }
-      if (key == "n_vac"  && val > 0) { cbg <- C_PEACH;  cfc <- F_BROWN }
+      if (key == "n_pto"    && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;  cbold <- TRUE }
+      if (key == "n_bump"  && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000"; cbold <- TRUE }
+      if (key == "n_reqoff" && val > 0) { cbg <- C_PEACH; cfc <- F_BROWN }
       writeData(wb, "Summary", x = val,
         startRow = srow, startCol = 1L + ci, colNames = FALSE)
       addStyle(wb, "Summary",
