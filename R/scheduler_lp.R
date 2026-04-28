@@ -547,19 +547,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       ssoff  <- wsshoff + nWSSHORT
       ssidx  <- function(p, d) ssoff + (p - 1L) * nD + d
 
-      # Weekend-isolation auxiliaries: wiso[p,k] binary.
-      # wiso[p,k]=1 iff person p works exactly one of Saturday or Sunday of weekend k.
-      sat_sun_pairs <- local({
-        sat_di <- which(weekdays(dates_vec) == "Saturday")
-        sat_di[sat_di + 1L <= nD & weekdays(dates_vec[sat_di + 1L]) == "Sunday"]
-      })
-      nK      <- length(sat_sun_pairs)
-      nWISO   <- nP * nK
-      wisoff  <- ssoff + nSS
-      wisoidx <- function(p, k) wisoff + (p - 1L) * nK + k
-
       nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS +
-            nNSSHORT + nWSSHORT + nSS + nWISO
+            nNSSHORT + nWSSHORT + nSS
 
       # Variable bounds and types
       lb    <- numeric(nV)
@@ -568,14 +557,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                  rep(1, nISO), rep(1, nSRS),
                  rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
                  rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT),
-                 rep(1, nSS),
-                 rep(1, nWISO))
+                 rep(1, nSS))
       types <- c(rep("I", nX),
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
                  rep("I", nISO),
                  rep("I", nSRS),
-                 rep("C", nNSSHORT + nWSSHORT + nSS),
-                 rep("I", nWISO))
+                 rep("C", nNSSHORT + nWSSHORT + nSS))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -611,8 +598,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # Penalise isolated single shifts — solver actively avoids them.
       if (nISO > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -1.5
-      if (nWISO > 0L)
-        for (p in seq_len(nP)) for (k in seq_len(nK)) obj[wisoidx(p, k)] <- -WISO_PEN
       # Tiny penalty on srs variables so they stay at their natural lower bound.
 
       if (nSRS > 0L)
@@ -1165,21 +1150,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           wknd_cols <- vapply(wknd_di, function(di) widx(pi, di), integer(1L))
           add_con(c(wsshidx(pi), wknd_cols),
                   c(1L, rep(1L, length(wknd_cols))), ">=", MIN_WKND_SOFT_TOTAL)
-        }
-      }
-
-      # ── C_wiso: wiso[p,k]=1 iff exactly one of Sat/Sun of weekend k is worked ─
-      if (nWISO > 0L) {
-        for (pi in seq_len(nP)) {
-          for (ki in seq_len(nK)) {
-            sat_di <- sat_sun_pairs[ki]; sun_di <- sat_di + 1L
-            wi <- wisoidx(pi, ki)
-            ws <- widx(pi, sat_di)
-            wu <- widx(pi, sun_di)
-            add_con(c(wi, ws, wu), c(-1L,  1L, -1L), "<=", 0L)  # wiso >= work[sat]-work[sun]
-            add_con(c(wi, ws, wu), c(-1L, -1L,  1L), "<=", 0L)  # wiso >= work[sun]-work[sat]
-            add_con(c(wi, ws, wu), c( 1L, -1L, -1L), "<=", 0L)  # wiso <= work[sat]+work[sun]
-          }
         }
       }
 
