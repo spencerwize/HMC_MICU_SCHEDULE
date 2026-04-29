@@ -15,6 +15,9 @@ server <- function(input, output, session) {
       message("Could not fetch sheet names from API — using default list.")
       TIMEOFF_SHEETS
     }))
+    
+    sheet_names <- sheet_names[-which(sheet_names %in% c('Rules', 'rules'))]
+    
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
