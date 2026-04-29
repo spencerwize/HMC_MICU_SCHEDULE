@@ -360,11 +360,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }, logical(1L))))
       }, integer(1L)))
 
-      score <- -(max(nights_ct) - min(nights_ct)) -
-               0.1    * (max(wknd_ct) - min(wknd_ct)) -
-               0.01   * dense_windows -
-               0.005  * split_wknds -
-               0.0001 * day_night_transitions
+      score <- -0.75  * (max(nights_ct) - min(nights_ct)) -
+               0.5    * (max(wknd_ct) - min(wknd_ct)) -
+               0.1    * dense_windows -
+               0.05   * split_wknds -
+               0.01   * day_night_transitions
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
       empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
