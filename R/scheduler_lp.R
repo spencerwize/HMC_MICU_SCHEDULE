@@ -353,9 +353,17 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         sum(xor(sat_sun_pair %in% worked, sun_pair %in% worked))
       }, integer(1L)))
 
+      dense_windows <- sum(vapply(STAFF, function(p) {
+        worked <- c(self$person_shifts[[p]]$date, self$person_nights[[p]])
+        as.integer(sum(vapply(seq_len(nD - 6L), function(di) {
+          sum(dates_vec[di:(di + 6L)] %in% worked) >= 6L
+        }, logical(1L))))
+      }, integer(1L)))
+
       score <- -(max(nights_ct) - min(nights_ct)) -
                0.1    * (max(wknd_ct) - min(wknd_ct)) -
-               0.01   * split_wknds -
+               0.01   * dense_windows -
+               0.005  * split_wknds -
                0.0001 * day_night_transitions
 
       # Reset all mutable schedule state back to empty (mirrors initialize())
