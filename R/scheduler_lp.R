@@ -353,6 +353,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         sum(xor(sat_sun_pair %in% worked, sun_pair %in% worked))
       }, integer(1L)))
 
+      nD <- length(dates_vec)
       dense_windows <- sum(vapply(STAFF, function(p) {
         worked <- c(self$person_shifts[[p]]$date, self$person_nights[[p]])
         as.integer(sum(vapply(seq_len(nD - 6L), function(di) {
