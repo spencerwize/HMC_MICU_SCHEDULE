@@ -147,6 +147,11 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   S_LTR  <- col_letter(SCHED_STAFF_START)        # "H"
   E_LTR  <- col_letter(SCHED_STAFF_END)          # dynamic
 
+  # Helpers reused by both Summary live formulas and Schedule slot formulas.
+  # person_pc(ci) returns the Schedule-sheet column letter for the ci-th staff member.
+  person_pc     <- function(ci) col_letter(SCHED_STAFF_START + ci - 1L)
+  MAX_SCHED_ROW <- 200L   # row ceiling for COUNTIFS / SUMPRODUCT on Schedule sheet
+
   # Single row per day — formulas reference just one row in the Schedule sheet.
   cal_role_formula <- function(row) {
     D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, row, E_LTR, row)
@@ -374,7 +379,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # ════════════════════════════════════════════════════════════════════════════
   addWorksheet(wb, "Summary")
 
-  SUM_COLS <- 1L + N_STAFF
+  SUM_COLS       <- 1L + N_STAFF
+  HLPR_COL_START <- SUM_COLS + 2L          # first hidden helper column (col 13 for 10 staff)
+  LIVE_KEYS      <- c("n_night", "n_roam", "n_wknd", "n_bump")
 
   sec_hdr <- function(row, label) {
     mergeCells(wb, "Summary", cols = 1:SUM_COLS, rows = row)
@@ -476,17 +483,39 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       mk(fg = row_bg, bold = TRUE, font_color = F_NAVY,
          halign = "left", border = "All", border_color = "#DDDDDD"),
       rows = srow, cols = 1)
+    if (key == "n_bump") bump_srow <- srow
     for (ci in seq_along(STAFF)) {
-      val    <- pstats[[STAFF[ci]]][[key]]
-      cbg    <- row_bg
-      cfc    <- F_NAVY
-      cbold  <- FALSE
-      if (cred_flag  && val > 0) { cbg <- C_ORANGE; cfc <- F_WHITE; cbold <- TRUE }
-      if (key == "n_pto"    && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;  cbold <- TRUE }
-      if (key == "n_bump"  && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000"; cbold <- TRUE }
-      if (key == "n_reqoff" && val > 0) { cbg <- C_PEACH; cfc <- F_BROWN }
-      writeData(wb, "Summary", x = val,
-        startRow = srow, startCol = 1L + ci, colNames = FALSE)
+      val   <- pstats[[STAFF[ci]]][[key]]
+      cbg   <- row_bg; cfc <- F_NAVY; cbold <- FALSE
+      if (cred_flag        && val > 0) { cbg <- C_ORANGE;  cfc <- F_WHITE;    cbold <- TRUE }
+      if (key == "n_pto"   && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;      cbold <- TRUE }
+      if (key == "n_bump"  && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000";  cbold <- TRUE }
+      if (key == "n_reqoff"&& val > 0) { cbg <- C_PEACH;   cfc <- F_BROWN }
+
+      if (key %in% LIVE_KEYS) {
+        pc  <- person_pc(ci)
+        fml <- if (key == "n_night") {
+          sprintf('COUNTIF(Schedule!$%1$s:$%1$s,"Night")', pc)
+        } else if (key == "n_roam") {
+          sprintf('COUNTIF(Schedule!$%1$s:$%1$s,"APP 3")', pc)
+        } else if (key == "n_wknd") {
+          sprintf(paste0(
+            'SUMPRODUCT(((Schedule!$B$2:$B$%1$d="Sat")+(Schedule!$B$2:$B$%1$d="Sun"))',
+            '*((Schedule!$%2$s$2:$%2$s$%1$d="APP1")+(Schedule!$%2$s$2:$%2$s$%1$d="APP2")',
+            '+(Schedule!$%2$s$2:$%2$s$%1$d="APP 3")+(Schedule!$%2$s$2:$%2$s$%1$d="Night")))'),
+            MAX_SCHED_ROW, pc)
+        } else {
+          # n_bump: compare per-PP targets (rows 1:N_PP) vs live COUNTIFS actuals (rows N_PP+1:2*N_PP)
+          hc <- col_letter(HLPR_COL_START + ci - 1L)
+          sprintf('SUMPRODUCT((%1$s$1:%1$s$%2$d>%1$s$%3$d:%1$s$%4$d)*(%1$s$1:%1$s$%2$d-%1$s$%3$d:%1$s$%4$d))',
+            hc, N_PP, N_PP + 1L, 2L * N_PP)
+        }
+        writeFormula(wb, "Summary", x = fml, startRow = srow, startCol = 1L + ci)
+        cbg <- if (key == "n_bump") "#FFFAF0" else "#FFFFFF"
+        cbold <- FALSE; cfc <- F_NAVY
+      } else {
+        writeData(wb, "Summary", x = val, startRow = srow, startCol = 1L + ci, colNames = FALSE)
+      }
       addStyle(wb, "Summary",
         mk(fg = cbg, bold = cbold, font_color = cfc,
            border = "All", border_color = "#DDDDDD"),
@@ -496,6 +525,16 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     srow <- srow + 1L
   }
   srow <- srow + 1L  # spacer
+
+  # Conditional formatting for shortfall row: red when live formula > 0
+  if (exists("bump_srow")) {
+    conditionalFormatting(wb, "Summary",
+      cols  = 2L:SUM_COLS, rows = bump_srow,
+      type  = "expression",
+      rule  = sprintf("B%d>0", bump_srow),
+      style = createStyle(fgFill = "#FFE0E0", fontColour = "#C00000",
+                          textDecoration = "bold"))
+  }
 
   # ── Pay Period Detail section ─────────────────────────────────────────────
   sec_hdr(srow, "Pay Period Detail"); srow <- srow + 1L
@@ -588,6 +627,36 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     widths = c(26, rep(12, N_STAFF)))
   freezePane(wb, "Summary", firstRow = TRUE)
 
+  # ── Hidden helper block for live shortfall ────────────────────────────────
+  # Rows 1:N_PP       → static sched_target per person per PP
+  # Rows (N_PP+1):2*N_PP → COUNTIFS actual shifts per person per PP from Schedule
+  # These are referenced by the n_bump live formula in the Overview section.
+  for (ci in seq_along(STAFF)) {
+    person <- STAFF[ci]
+    pc     <- person_pc(ci)
+    hcn    <- HLPR_COL_START + ci - 1L
+    for (k in seq_len(N_PP)) {
+      writeData(wb, "Summary",
+        x = as.integer(targets[[person]][[PAY_PERIODS$name[k]]]$sched_target),
+        startRow = k, startCol = hcn, colNames = FALSE)
+    }
+    for (k in seq_len(N_PP)) {
+      ppn <- PAY_PERIODS$name[k]
+      writeFormula(wb, "Summary",
+        x = sprintf(paste0(
+          'COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP1")',
+          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP2")',
+          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP 3")',
+          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"Night")'),
+          MAX_SCHED_ROW, ppn, pc),
+        startRow = N_PP + k, startCol = hcn)
+    }
+  }
+  setColWidths(wb, "Summary",
+    cols   = seq(HLPR_COL_START, HLPR_COL_START + N_STAFF - 1L),
+    widths = rep(8, N_STAFF),
+    hidden = TRUE)
+
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 3 · Schedule  (two rows per calendar day)
   # ════════════════════════════════════════════════════════════════════════════
@@ -676,9 +745,15 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     dr <- schr
     writeData(wb, "Schedule",
       x = data.frame(Date = date_str, Day = day_lbl, PP = pp_lbl,
-                     APP1 = app1, APP2 = app2, APP3 = roam, Night = night,
                      stringsAsFactors = FALSE),
       startRow = dr, startCol = 1, colNames = FALSE)
+    slot_fml <- function(role) sprintf(
+      'IFERROR(INDEX($%s$1:$%s$1,MATCH("%s",SUBSTITUTE(%s%d:%s%d," ",""),0)),"")',
+      S_LTR, E_LTR, role, S_LTR, dr, E_LTR, dr)
+    writeFormula(wb, "Schedule", x = slot_fml("APP1"),  startRow = dr, startCol = 4L)
+    writeFormula(wb, "Schedule", x = slot_fml("APP2"),  startRow = dr, startCol = 5L)
+    writeFormula(wb, "Schedule", x = slot_fml("APP3"),  startRow = dr, startCol = 6L)
+    writeFormula(wb, "Schedule", x = slot_fml("Night"), startRow = dr, startCol = 7L)
     writeData(wb, "Schedule",
       x = date_str, startRow = dr, startCol = N_COLS, colNames = FALSE)
 
