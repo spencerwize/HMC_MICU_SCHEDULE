@@ -91,12 +91,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     person_shifts = NULL,   # person -> data.frame(date, slot)
     pp_counts     = NULL,   # person -> named int vector (pp -> count)
     granted_pto   = NULL,   # person -> Date vector (empty for ILP path)
-    tier_used     = NULL,   # list(index, label) of relaxation tier that found a solution
+    tier_used      = NULL,   # list(index, label) of relaxation tier that found a solution
+    prior_schedule = NULL,  # person -> data.frame(date, type) for days before schedule start
 
     # ── Constructor ───────────────────────────────────────────────────────────
-    initialize = function(time_off, targets) {
-      self$time_off    <- time_off
-      self$targets     <- targets
+    initialize = function(time_off, targets, prior_schedule = NULL) {
+      self$time_off       <- time_off
+      self$targets        <- targets
+      self$prior_schedule <- prior_schedule
       self$dates       <- all_dates()
       self$granted_pto <- setNames(
         lapply(STAFF, function(p) as.Date(character())), STAFF)
@@ -502,6 +504,28 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       S_APP1 <- 1L; S_APP2 <- 2L; S_ROAM <- 3L; S_NIGHT <- 4L
       DAY_S  <- c(S_APP1, S_APP2, S_ROAM)
 
+      # ── Prior-schedule precomputation ─────────────────────────────────────────
+      sched_day0   <- dates_vec[1L] - 1L          # last date before schedule
+      ps_has_prior <- !is.null(self$prior_schedule)
+      if (ps_has_prior) {
+        .ps_nights <- lapply(seq_len(nP), function(pi) {
+          ps <- self$prior_schedule[[STAFF[pi]]]
+          if (is.null(ps) || nrow(ps) == 0L) as.Date(character())
+          else as.Date(ps$date[ps$type == "night"])
+        })
+        .ps_days <- lapply(seq_len(nP), function(pi) {
+          ps <- self$prior_schedule[[STAFF[pi]]]
+          if (is.null(ps) || nrow(ps) == 0L) as.Date(character())
+          else as.Date(ps$date[ps$type == "day"])
+        })
+        .ps_all <- lapply(seq_len(nP), function(pi)
+          c(.ps_nights[[pi]], .ps_days[[pi]]))
+      } else {
+        .ps_nights <- lapply(seq_len(nP), function(pi) as.Date(character()))
+        .ps_days   <- lapply(seq_len(nP), function(pi) as.Date(character()))
+        .ps_all    <- lapply(seq_len(nP), function(pi) as.Date(character()))
+      }
+
       # x[p,d,s] binary
       nX   <- nP * nD * nS
       xidx <- function(p, d, s) (p - 1L) * nD * nS + (d - 1L) * nS + s
@@ -735,6 +759,37 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C5c: Prior-schedule boundary upper bounds ─────────────────────────────
+      # Block assignments that would violate transition rules when a person worked
+      # on the days immediately before the schedule starts.
+      if (ps_has_prior) {
+        for (pi in seq_len(nP)) {
+          pre1 <- sched_day0
+          pre2 <- sched_day0 - 1L
+          had_night_pre1 <- pre1 %in% .ps_nights[[pi]]
+          had_day_pre1   <- pre1 %in% .ps_days[[pi]]
+          had_day_pre2   <- pre2 %in% .ps_days[[pi]]
+
+          # C7/C7b boundary: Night on pre-day-1 → no Day slots on sched days 1 & 2
+          if (had_night_pre1) {
+            for (s in DAY_S) ub[xidx(pi, 1L, s)] <- 0
+            if (nD >= 2L) for (s in DAY_S) ub[xidx(pi, 2L, s)] <- 0
+          }
+          # C8 boundary: Day on pre-day-1 → no Night on sched day 1
+          if (had_day_pre1)
+            ub[xidx(pi, 1L, S_NIGHT)] <- 0
+          # C8b boundary: Day on pre-day-1 OR pre-day-2 → no Night on sched day 2
+          if ((had_day_pre1 || had_day_pre2) && nD >= 2L)
+            ub[xidx(pi, 2L, S_NIGHT)] <- 0
+          # C11b boundary: Night on pre-day-1 → ss[p,1] = 0 (person continues existing run)
+          if (had_night_pre1)
+            ub[ssidx(pi, 1L)] <- 0
+          # C15b boundary: Work on pre-day-1 → iso[p,1] = 0 (day 1 is anchored, not isolated)
+          if ((pre1 %in% .ps_all[[pi]]) && nISO > 0L)
+            ub[isoidx(pi, 1L)] <- 0
+        }
+      }
+
       # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] ≤ sched_target[p,PP] ────────
       for (pi in seq_len(nP)) {
         person <- STAFF[pi]
@@ -835,12 +890,45 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C9x: Cross-boundary max-4-consecutive nights ─────────────────────────
+      # For windows that span prior-schedule nights into sched days 1..4.
+      # k prior days in window → sched nights in remaining (5-k) days ≤ 4 - pre_count.
+      if (add_c9 && ps_has_prior) {
+        for (pi in seq_len(nP)) {
+          for (k in 1L:min(4L, nD)) {
+            pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
+            pre_count <- as.integer(sum(pre_dates %in% .ps_nights[[pi]]))
+            if (pre_count == 0L) next
+            j_max <- 5L - k
+            if (j_max < 1L) next
+            cols <- vapply(seq_len(j_max), function(j) xidx(pi, j, S_NIGHT), integer(1L))
+            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 4L - pre_count))
+          }
+        }
+      }
+
       # ── C10: Max 4 consecutive working days — Σ_{k=0}^4 work[p,d+k] ≤ 4 ─────
       if (add_c10) {
         for (pi in seq_len(nP)) {
           for (di in seq_len(nD - 4L)) {
             cols <- vapply(0:4, function(k) widx(pi, di + k), integer(1L))
             add_con(cols, rep(1L, 5L), "<=", 4L)
+          }
+        }
+      }
+
+      # ── C10x: Cross-boundary max-4-consecutive work days ─────────────────────
+      # Mirrors C9x but for any shift type (work[p,d]).
+      if (add_c10 && ps_has_prior) {
+        for (pi in seq_len(nP)) {
+          for (k in 1L:min(4L, nD)) {
+            pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
+            pre_count <- as.integer(sum(pre_dates %in% .ps_all[[pi]]))
+            if (pre_count == 0L) next
+            j_max <- 5L - k
+            if (j_max < 1L) next
+            cols <- vapply(seq_len(j_max), function(j) widx(pi, j), integer(1L))
+            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 4L - pre_count))
           }
         }
       }
@@ -870,6 +958,22 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── C10cx: Cross-boundary 8-day density cap ──────────────────────────────
+      # Handles windows that include prior-schedule work days.
+      if (add_c10c && ps_has_prior && nD >= 1L) {
+        for (pi in seq_len(nP)) {
+          for (k in 1L:min(7L, nD)) {
+            pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
+            pre_count <- as.integer(sum(pre_dates %in% .ps_all[[pi]]))
+            if (pre_count == 0L) next
+            j_max <- 8L - k
+            if (j_max < 1L) next
+            cols <- vapply(seq_len(j_max), function(j) widx(pi, j), integer(1L))
+            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 6L - pre_count))
+          }
+        }
+      }
+
       # ── C11: Total nights per person ≤ MAX_NIGHTS_TOTAL ──────────────────────
       for (pi in seq_len(nP)) {
         cols <- vapply(seq_len(nD), function(di) xidx(pi, di, S_NIGHT), integer(1L))
@@ -891,7 +995,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             ni <- xidx(pi, di, S_NIGHT)
             add_con(c(si, ni), c(1, -1), "<=", 0)          # ss <= x[d,N]
             if (di == 1L) {
-              add_con(c(si, ni), c(1, -1), ">=", 0)        # ss >= x[1,N]
+              # Skip when person continued from a prior-night run (ub[ss]=0 set in C5c).
+              if (!ps_has_prior || !(sched_day0 %in% .ps_nights[[pi]]))
+                add_con(c(si, ni), c(1, -1), ">=", 0)      # ss >= x[1,N]
             } else {
               ni_p <- xidx(pi, di - 1L, S_NIGHT)
               add_con(c(si, ni, ni_p), c(1, -1, 1), ">=", 0) # ss >= x[d,N]-x[d-1,N]
@@ -959,8 +1065,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # Boundary d=nD: x[p,nD,Nt] ≤ x[p,nD-1,Nt]
       if (add_c13) {
         for (pi in seq_len(nP)) {
-          add_con(c(xidx(pi, 1L, S_NIGHT), xidx(pi, 2L, S_NIGHT)),
-                  c(1, -1), "<=", 0L)
+          # Skip d=1 boundary when person already worked Night on pre-day-1:
+          # x[p,0,N]=1 is the left neighbour, so a solo night on day 1 is valid.
+          if (!ps_has_prior || !(sched_day0 %in% .ps_nights[[pi]]))
+            add_con(c(xidx(pi, 1L, S_NIGHT), xidx(pi, 2L, S_NIGHT)),
+                    c(1, -1), "<=", 0L)
           if (nD >= 3L) {
             for (di in 2L:(nD - 1L)) {
               add_con(c(xidx(pi, di - 1L, S_NIGHT),
@@ -1007,7 +1116,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # Boundary d=nD: work[p,nD] ≤ work[p,nD-1]
       if (add_c15) {
         for (pi in seq_len(nP)) {
-          add_con(c(widx(pi, 1L), widx(pi, 2L)), c(1, -1), "<=", 0L)
+          # Skip d=1 boundary when person worked any shift on pre-day-1:
+          # day 1 is anchored to the prior work and is not an isolated single shift.
+          if (!ps_has_prior || !(sched_day0 %in% .ps_all[[pi]]))
+            add_con(c(widx(pi, 1L), widx(pi, 2L)), c(1, -1), "<=", 0L)
           if (nD >= 3L) {
             for (di in 2L:(nD - 1L)) {
               add_con(c(widx(pi, di - 1L), widx(pi, di + 1L), widx(pi, di)),
@@ -1027,8 +1139,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       if (nISO > 0L) {
         for (pi in seq_len(nP)) {
           # Left boundary (d=1, no left neighbour)
-          add_con(c(isoidx(pi, 1L), widx(pi, 1L), widx(pi, 2L)),
-                  c(-1L, 1L, -1L), "<=", 0L)
+          # Skip when person worked pre-day-1 (ub[iso[p,1]]=0 set in C5c; LB trivially satisfied).
+          if (!ps_has_prior || !(sched_day0 %in% .ps_all[[pi]]))
+            add_con(c(isoidx(pi, 1L), widx(pi, 1L), widx(pi, 2L)),
+                    c(-1L, 1L, -1L), "<=", 0L)
           # Interior days
           if (nD >= 3L) {
             for (di in 2L:(nD - 1L)) {
@@ -1090,9 +1204,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       if (add_c16 && nD >= 3L) {
         dcols <- function(pi, di) vapply(DAY_S, function(s) xidx(pi, di, s), integer(1L))
         for (pi in seq_len(nP)) {
-          # Left boundary (d=1, no left neighbour)
-          add_con(c(dcols(pi, 1L), dcols(pi, 2L), dcols(pi, 3L)),
-                  c(rep(1, 3), rep(1, 3), rep(-1, 3)), "<=", 1)
+          # Skip left boundary when person had a day shift on pre-day-1:
+          # the {1,2} pair is anchored to pre-day-1 and is not an isolated 2-day block.
+          if (!ps_has_prior || !(sched_day0 %in% .ps_days[[pi]]))
+            add_con(c(dcols(pi, 1L), dcols(pi, 2L), dcols(pi, 3L)),
+                    c(rep(1, 3), rep(1, 3), rep(-1, 3)), "<=", 1)
           # Interior
           if (nD >= 4L) {
             for (di in 2L:(nD - 2L)) {
