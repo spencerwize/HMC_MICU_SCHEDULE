@@ -124,82 +124,44 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Main entry point ──────────────────────────────────────────────────────
-    run = function(n_candidates = N_CANDIDATES) {
+    run = function() {
       if (!requireNamespace("highs", quietly = TRUE))
         stop("highs package is not installed. Run: install.packages('highs')")
 
       tiers <- private$RELAX_TIERS
       nT    <- length(tiers)
 
-      # Helper to call build_and_solve with a tier's parameters
-      solve_tier <- function(t, extra_nogo = list()) {
-        private$build_and_solve(
-          night_required       = t$night_req,
-          roam_in_obj          = t$roam_obj,
-          pp_cap_reduction     = t$pp_red,
-          add_c8               = t$c8,
-          add_c8b              = t$c8b,
-          add_c9               = t$c9,
-          add_c10              = t$c10,
-          add_c10c             = t$c10c,
-          add_c11b             = t$c11b,
-          add_c11c             = t$c11c,
-          night_min_hard       = t$night_min_hard,
-          night_max_hard       = t$night_max_hard,
-          add_c13              = t$c13,
-          add_c14              = t$c14,
-          add_c15              = t$c15,
-          add_c16              = t$c16,
-          add_c_min            = t$c_min,
-          allow_pto            = t$allow_pto,
-          max_iso_per_person      = t$max_iso,
-          max_short_per_person    = t$max_short,
-          max_unstaffed_per_month = t$unstaffed_mo_cap,
-          extra_nogo              = extra_nogo
-        )
-      }
-
       for (ti in seq_len(nT)) {
         t      <- tiers[[ti]]
         message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
-        result <- solve_tier(t)
+        result <- private$build_and_solve(
+          night_required          = t$night_req,
+          roam_in_obj             = t$roam_obj,
+          pp_cap_reduction        = t$pp_red,
+          add_c8                  = t$c8,
+          add_c8b                 = t$c8b,
+          add_c9                  = t$c9,
+          add_c10                 = t$c10,
+          add_c10c                = t$c10c,
+          add_c11b                = t$c11b,
+          add_c11c                = t$c11c,
+          night_min_hard          = t$night_min_hard,
+          night_max_hard          = t$night_max_hard,
+          add_c13                 = t$c13,
+          add_c14                 = t$c14,
+          add_c15                 = t$c15,
+          add_c16                 = t$c16,
+          add_c_min               = t$c_min,
+          allow_pto               = t$allow_pto,
+          max_iso_per_person      = t$max_iso,
+          max_short_per_person    = t$max_short,
+          max_unstaffed_per_month = t$unstaffed_mo_cap
+        )
         if (is.null(result)) next
 
         self$tier_used <- list(index = ti, label = t$label)
-
-        # Collect up to n_candidates distinct solutions at this tier, then pick best
-        candidates <- list(result)
-        x_found    <- list(result$sol[seq_len(result$nX)])
-
-        if (n_candidates > 1L) {
-          message(sprintf("  Collecting up to %d candidates at tier %d…", n_candidates, ti))
-          for (ci in seq_len(n_candidates - 1L)) {
-            cand <- solve_tier(t, extra_nogo = x_found)
-            if (is.null(cand)) break
-            candidates <- c(candidates, list(cand))
-            x_found    <- c(x_found, list(cand$sol[seq_len(cand$nX)]))
-          }
-        }
-
-        message(sprintf("  %d candidate(s) — filling each and ranking by shift evenness…",
-                        length(candidates)))
-        scores <- vapply(seq_along(candidates), function(ci) {
-          message(sprintf("    Candidate %d/%d: fill + evenness score…",
-                          ci, length(candidates)))
-          private$score_candidate_evenness(candidates[[ci]])
-        }, numeric(1L))
-        best_idx <- which.max(scores)
-        message(sprintf("  Candidate scores [-(night spread) | -(wknd spread*0.1) | -(transitions*0.0001)]: [%s]  → best #%d (%.3f)",
-                        paste(round(scores, 3L), collapse = ", "),
-                        best_idx, scores[best_idx]))
-
-        best_res   <- candidates[[best_idx]]
-        candidates <- NULL
-        x_found    <- NULL
-        gc()
-
-        message("  Populating best candidate and filling APP3 slots…")
-        private$populate_from_solution(best_res)
+        message("  Populating solution and filling APP3 slots…")
+        private$populate_from_solution(result)
         private$fill_roaming_pass()
         message("  Done.")
         return(invisible(self))
@@ -320,71 +282,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
     # ── Score candidate after APP3 fill by shift-evenness ─────────────────────
     # Populates the schedule, runs greedy APP3 fill, then resets to empty.
-    # Three-level score (all encoded in one float, each level subordinate to the one above):
-    #   L1 primary  : -(max - min night shifts)   — tighter spread is better; range [-4, 0]
-    #   L2 secondary: -(max - min weekend shifts) — scale 0.1,    max ±0.4 < 1 unit of L1
-    #   L3 tertiary : -day→night transitions       — scale 0.0001, max ±0.1 < 0.1 unit of L2
-    score_candidate_evenness = function(res) {
-      private$populate_from_solution(res)
-      private$fill_roaming_pass()
-
-      dates_vec  <- as.Date(self$dates, origin = "1970-01-01")
-      wknd_dates <- dates_vec[weekdays(dates_vec) %in% c("Saturday", "Sunday")]
-
-      # Sat/Sun pairs where both days fall within the schedule window
-      sat_di       <- dates_vec[weekdays(dates_vec) == "Saturday"]
-      sat_sun_pair <- sat_di[sat_di + 1L %in% dates_vec]
-      sun_pair     <- sat_sun_pair + 1L
-
-      nights_ct <- vapply(STAFF, function(p) length(self$person_nights[[p]]), integer(1L))
-      wknd_ct   <- vapply(STAFF, function(p) {
-        sh <- self$person_shifts[[p]]
-        if (nrow(sh) == 0L) return(0L)
-        as.integer(sum(sh$date %in% wknd_dates))
-      }, integer(1L))
-
-      day_night_transitions <- sum(vapply(STAFF, function(p) {
-        day_d   <- self$person_shifts[[p]]$date
-        night_d <- self$person_nights[[p]]
-        if (length(day_d) == 0L || length(night_d) == 0L) return(0L)
-        as.integer(sum(vapply(night_d, function(nd) (nd - 1L) %in% day_d, logical(1L))))
-      }, integer(1L)))
-
-      split_wknds <- sum(vapply(STAFF, function(p) {
-        worked <- c(self$person_shifts[[p]]$date, self$person_nights[[p]])
-        sum(xor(sat_sun_pair %in% worked, sun_pair %in% worked))
-      }, integer(1L)))
-
-      nD <- length(dates_vec)
-      dense_windows <- sum(vapply(STAFF, function(p) {
-        worked <- c(self$person_shifts[[p]]$date, self$person_nights[[p]])
-        as.integer(sum(vapply(seq_len(nD - 6L), function(di) {
-          sum(dates_vec[di:(di + 6L)] %in% worked) >= 6L
-        }, logical(1L))))
-      }, integer(1L)))
-
-      score <- -0.75  * (max(nights_ct) - min(nights_ct)) -
-               0.5    * (max(wknd_ct) - min(wknd_ct)) -
-               0.1    * dense_windows -
-               0.05   * split_wknds -
-               0.01   * day_night_transitions
-
-      # Reset all mutable schedule state back to empty (mirrors initialize())
-      empty_slot <- list(APP1 = NA_character_, APP2 = NA_character_,
-                         Roaming = NA_character_, Night = NA_character_)
-      self$schedule      <- setNames(lapply(self$dates, function(d) empty_slot),
-                                     as.character(self$dates))
-      self$person_nights <- setNames(lapply(STAFF, function(p) as.Date(character())), STAFF)
-      self$person_shifts <- setNames(
-        lapply(STAFF, function(p) data.frame(date   = as.Date(character()),
-                                             slot   = character(),
-                                             stringsAsFactors = FALSE)), STAFF)
-      zero_pp <- setNames(integer(nrow(PAY_PERIODS)), PAY_PERIODS$name)
-      self$pp_counts <- setNames(lapply(STAFF, function(p) zero_pp), STAFF)
-
-      score
-    },
-
     # ── Relaxation cascade: 6 blocks × 5 tiers + nuclear fallbacks ───────────
     # Each block repeats the same 5-tier internal structure (run constraints),
     # varying only night_req and night_min_hard/night_max_hard.
