@@ -135,42 +135,39 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       for (ti in seq_len(nT)) {
         t <- tiers[[ti]]
-        for (pto_level in 0:2) {
-          lbl <- if (pto_level == 0L) "" else sprintf(" [PTO=%d]", pto_level)
-          message(sprintf("  [Tier %d/%d%s] %s", ti, nT, lbl, t$label))
-          result <- private$build_and_solve(
-            night_required          = t$night_req,
-            roam_in_obj             = t$roam_obj,
-            pp_cap_reduction        = t$pp_red,
-            add_c8                  = t$c8,
-            add_c8b                 = t$c8b,
-            add_c9                  = t$c9,
-            add_c10                 = t$c10,
-            add_c10c                = t$c10c,
-            add_c11b                = t$c11b,
-            add_c11c                = t$c11c,
-            night_min_hard          = t$night_min_hard,
-            night_max_hard          = t$night_max_hard,
-            add_c13                 = t$c13,
-            add_c14                 = t$c14,
-            add_c15                 = t$c15,
-            add_c16                 = t$c16,
-            add_c_min               = t$c_min,
-            pto_level               = pto_level,
-            max_iso_per_person      = t$max_iso,
-            max_short_per_person    = t$max_short,
-            max_unstaffed_per_month = t$unstaffed_mo_cap
-          )
-          if (is.null(result)) next
+        message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
+        result <- private$build_and_solve(
+          night_required          = t$night_req,
+          roam_in_obj             = t$roam_obj,
+          pp_cap_reduction        = t$pp_red,
+          add_c8                  = t$c8,
+          add_c8b                 = t$c8b,
+          add_c9                  = t$c9,
+          add_c10                 = t$c10,
+          add_c10c                = t$c10c,
+          add_c11b                = t$c11b,
+          add_c11c                = t$c11c,
+          night_min_hard          = t$night_min_hard,
+          night_max_hard          = t$night_max_hard,
+          add_c13                 = t$c13,
+          add_c14                 = t$c14,
+          add_c15                 = t$c15,
+          add_c16                 = t$c16,
+          add_c_min               = t$c_min,
+          pto_level               = 2L,
+          max_iso_per_person      = t$max_iso,
+          max_short_per_person    = t$max_short,
+          max_unstaffed_per_month = t$unstaffed_mo_cap
+        )
+        if (is.null(result)) next
 
-          self$tier_used <- list(index = ti, label = t$label, pto_level = pto_level)
-          private$populate_granted_pto(pto_level)
-          message("  Populating solution and filling APP3 slots…")
-          private$populate_from_solution(result)
-          private$fill_roaming_pass()
-          message("  Done.")
-          return(invisible(self))
-        }
+        self$tier_used <- list(index = ti, label = t$label, pto_level = 2L)
+        private$populate_granted_pto(2L)
+        message("  Populating solution and filling APP3 slots…")
+        private$populate_from_solution(result)
+        private$fill_roaming_pass()
+        message("  Done.")
+        return(invisible(self))
       }
 
       private$report_and_stop()
