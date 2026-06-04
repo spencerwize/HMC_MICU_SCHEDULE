@@ -685,10 +685,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] ≤ sched_target[p,PP] ────────
-      pto_credit_mat <- matrix(0L, nP, nrow(PAY_PERIODS))  # [pi, ppi] used in C10c + C_min
+      # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] = sched_target - pto_credit (non-flex)
+      #                                             ≤ sched_target - pto_credit (flex/Todd)
+      pto_credit_mat <- matrix(0L, nP, nrow(PAY_PERIODS))  # [pi, ppi] used in C10c
       for (pi in seq_len(nP)) {
-        person <- STAFF[pi]
+        person        <- STAFF[pi]
+        is_flex       <- person %in% names(FLEX_TARGETS)
         for (ppi in seq_len(nrow(PAY_PERIODS))) {
           pp_name <- PAY_PERIODS$name[ppi]
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
@@ -721,29 +723,28 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           cols <- as.integer(unlist(lapply(di_pp, function(di)
             vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
           add_con(cols, rep(1, length(cols)), "<=", cap)
+          # Non-flex staff: enforce equality so PTO days count toward the 6-shift total.
+          # Capped by avail so it can't require more shifts than the person can work.
+          if (!is_flex) {
+            floor <- min(cap, self$targets[[person]][[pp_name]]$avail)
+            if (floor > 0L)
+              add_con(cols, rep(1, length(cols)), ">=", floor)
+          }
         }
       }
 
-      # ── C_min: Minimum shifts per PP for all staff ──────────────────────────────
-      # Non-FLEX staff (everyone except Todd): exactly sched_target - pp_red - pto_credit
-      #   worked shifts (PTO days count toward the 6-shift total, so worked = 6 - pto).
-      # FLEX_TARGETS (Todd): soft_min floor only (stays flexible 4–6).
-      # Skipped when person has fewer available days than their floor.
+      # ── C_min: Minimum shifts per PP for FLEX staff (Todd) ─────────────────────
+      # Non-flex staff get exact equality in C6 above; only flex staff need this.
       if (add_c_min) {
         for (pi in seq_len(nP)) {
           person <- STAFF[pi]
-          is_flex <- person %in% names(FLEX_TARGETS)
+          if (!(person %in% names(FLEX_TARGETS))) next
           for (ppi in seq_len(nrow(PAY_PERIODS))) {
             pp_name <- PAY_PERIODS$name[ppi]
             pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
             di_pp   <- which(dates_vec %in% pp_d)
             t_info  <- self$targets[[person]][[pp_name]]
-            sm <- if (is_flex) {
-              min(t_info$soft_min, t_info$avail)
-            } else {
-              min(max(0L, t_info$sched_target - pp_cap_reduction -
-                           pto_credit_mat[pi, ppi]), t_info$avail)
-            }
+            sm      <- min(t_info$soft_min, t_info$avail)
             if (sm <= 0L || length(di_pp) == 0L) next
             cols <- as.integer(unlist(lapply(di_pp, function(di)
               vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
