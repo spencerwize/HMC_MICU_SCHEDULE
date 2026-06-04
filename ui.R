@@ -187,6 +187,7 @@ ui <- page_navbar(
           legend_chip("#BDD7EE", "Night"),
           legend_chip("#FFFF99", "Holiday"),
           legend_chip("#FFD966", "VAC"),
+          legend_chip("#FF99CC", "PTO"),
           legend_chip("#FF6D01", "CME / Conference"),
           legend_chip("#FFC7CE", "Off"),
           legend_chip("#F2F2F2", "Weekend (no shift)")

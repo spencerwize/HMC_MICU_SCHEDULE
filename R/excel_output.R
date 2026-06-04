@@ -21,6 +21,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   C_YELLOW   <- "#FFF2CC"
   C_PEACH    <- "#FCE4D6"
   C_PINK     <- "#F4CCCC"
+  C_PTO      <- "#FF99CC"
   C_ORANGE   <- "#FF6D01"
   C_CREAM    <- "#FFFBF0"
   C_GRAY_LT  <- "#F2F2F2"
@@ -64,6 +65,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
                if (s == "APP1")  "APP1"   else
                if (s == "APP2")  "APP2"   else "APP 3")
     }
+    if (d %in% sched_obj$granted_pto[[person]]) return("PTO")
     pdata <- time_off[[person]]
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
@@ -79,7 +81,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      CME  = C_ORANGE, OFF = C_PINK,
+      CME  = C_ORANGE, OFF = C_PINK, PTO = C_PTO,
       NULL)
   }
 
@@ -87,7 +89,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      CME = F_WHITE, OFF = F_RED,
+      CME = F_WHITE, OFF = F_RED, PTO = F_RED,
       "#000000")
   }
 

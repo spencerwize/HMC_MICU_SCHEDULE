@@ -328,7 +328,9 @@ server <- function(input, output, session) {
             break
           }
         }
-        if (role == "") {
+        if (role == "" && cur %in% p$sched$granted_pto[[person]]) {
+          role <- "PTO"
+        } else if (role == "") {
           pdata <- p$time_off[[person]]
           m     <- pdata[pdata$date == cur, ]
           typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
@@ -352,6 +354,7 @@ server <- function(input, output, session) {
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
+          PTO     = "#FF99CC",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
         )
         color <- if (role == "CME") "#FFFFFF" else "#000000"
@@ -419,8 +422,9 @@ server <- function(input, output, session) {
     role_colors <- c(
       APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
       Night   = "#BDD7EE",
-      CME  = "#FF6D01",
-      OFF  = "#FFC7CE"
+      CME     = "#FF6D01",
+      OFF     = "#FFC7CE",
+      PTO     = "#FF99CC"
     )
 
     wide <- grid %>%
@@ -621,7 +625,20 @@ server <- function(input, output, session) {
       })
     })) %>% bind_rows()
 
+    # Compute PTO granted per person-PP from sched$granted_pto
+    pto_df <- do.call(rbind, lapply(STAFF, function(person) {
+      pto_dates <- p$sched$granted_pto[[person]]
+      lapply(PAY_PERIODS$name, function(pp) {
+        pp_row <- PAY_PERIODS[PAY_PERIODS$name == pp, ]
+        n <- if (length(pto_dates) == 0L) 0L else
+          sum(pto_dates >= pp_row$start & pto_dates <= pp_row$end)
+        data.frame(person = person, pp = pp, pto_granted = n,
+                   stringsAsFactors = FALSE)
+      })
+    })) %>% bind_rows()
+
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
+      left_join(pto_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
         actual < soft_min     ~ "Below minimum",
         actual < sched_target ~ "Under",
@@ -638,6 +655,8 @@ server <- function(input, output, session) {
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
         soft_min     = colDef(name = "Min Floor",    width = 80),
+        pto_granted  = colDef(name = "PTO Credited", width = 100,
+          cell = function(v) if (!is.na(v) && v > 0L) as.character(v) else "—"),
         actual       = colDef(name = "Actual",       width = 70),
         status       = colDef(name = "Status",       width = 115,
           style = function(value) {

@@ -133,39 +133,43 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       nT    <- length(tiers)
 
       for (ti in seq_len(nT)) {
-        t      <- tiers[[ti]]
-        message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
-        result <- private$build_and_solve(
-          night_required          = t$night_req,
-          roam_in_obj             = t$roam_obj,
-          pp_cap_reduction        = t$pp_red,
-          add_c8                  = t$c8,
-          add_c8b                 = t$c8b,
-          add_c9                  = t$c9,
-          add_c10                 = t$c10,
-          add_c10c                = t$c10c,
-          add_c11b                = t$c11b,
-          add_c11c                = t$c11c,
-          night_min_hard          = t$night_min_hard,
-          night_max_hard          = t$night_max_hard,
-          add_c13                 = t$c13,
-          add_c14                 = t$c14,
-          add_c15                 = t$c15,
-          add_c16                 = t$c16,
-          add_c_min               = t$c_min,
-          allow_pto               = t$allow_pto,
-          max_iso_per_person      = t$max_iso,
-          max_short_per_person    = t$max_short,
-          max_unstaffed_per_month = t$unstaffed_mo_cap
-        )
-        if (is.null(result)) next
+        t <- tiers[[ti]]
+        for (pto_level in 0:2) {
+          lbl <- if (pto_level == 0L) "" else sprintf(" [PTO=%d]", pto_level)
+          message(sprintf("  [Tier %d/%d%s] %s", ti, nT, lbl, t$label))
+          result <- private$build_and_solve(
+            night_required          = t$night_req,
+            roam_in_obj             = t$roam_obj,
+            pp_cap_reduction        = t$pp_red,
+            add_c8                  = t$c8,
+            add_c8b                 = t$c8b,
+            add_c9                  = t$c9,
+            add_c10                 = t$c10,
+            add_c10c                = t$c10c,
+            add_c11b                = t$c11b,
+            add_c11c                = t$c11c,
+            night_min_hard          = t$night_min_hard,
+            night_max_hard          = t$night_max_hard,
+            add_c13                 = t$c13,
+            add_c14                 = t$c14,
+            add_c15                 = t$c15,
+            add_c16                 = t$c16,
+            add_c_min               = t$c_min,
+            pto_level               = pto_level,
+            max_iso_per_person      = t$max_iso,
+            max_short_per_person    = t$max_short,
+            max_unstaffed_per_month = t$unstaffed_mo_cap
+          )
+          if (is.null(result)) next
 
-        self$tier_used <- list(index = ti, label = t$label)
-        message("  Populating solution and filling APP3 slots…")
-        private$populate_from_solution(result)
-        private$fill_roaming_pass()
-        message("  Done.")
-        return(invisible(self))
+          self$tier_used <- list(index = ti, label = t$label, pto_level = pto_level)
+          private$populate_granted_pto(pto_level)
+          message("  Populating solution and filling APP3 slots…")
+          private$populate_from_solution(result)
+          private$fill_roaming_pass()
+          message("  Done.")
+          return(invisible(self))
+        }
       }
 
       private$report_and_stop()
@@ -198,7 +202,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c15            = t$c15,
           add_c16            = t$c16,
           add_c_min            = t$c_min,
-          allow_pto            = t$allow_pto,
+          pto_level            = self$tier_used$pto_level,
           max_iso_per_person      = t$max_iso,
           max_short_per_person    = t$max_short,
           max_unstaffed_per_month = t$unstaffed_mo_cap,
@@ -249,7 +253,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
               break
             }
           }
-          if (is.na(role)) {
+          if (is.na(role) && d %in% self$granted_pto[[person]]) {
+            role <- "PTO"
+          } else if (is.na(role)) {
             pdata <- time_off[[person]]
             m     <- pdata[pdata$date == d, ]
             if (nrow(m) > 0)
@@ -297,18 +303,18 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       mk <- function(label, night_req, night_min, night_max,
                      c15, c16, unstaffed_mo_cap, fast_skip = FALSE) {
         list(label=label, fast_skip=fast_skip,
-             night_req=night_req, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
+             night_req=night_req, roam_obj=TRUE, pp_red=0L, c_min=TRUE,
              c8=TRUE,  c8b=TRUE,  c9=TRUE, c10=TRUE, c10c=TRUE, c11b=TRUE, c11c=TRUE,
              c13=TRUE, c14=TRUE,
              night_min_hard=night_min, night_max_hard=night_max,
              c15=c15, c16=c16, max_iso=NULL, max_short=NULL,
              unstaffed_mo_cap=unstaffed_mo_cap)
       }
-      mk_nuclear <- function(label, night_req, pp_red, allow_pto, c_min,
+      mk_nuclear <- function(label, night_req, pp_red, c_min,
                              c8, c8b, c9, c10, c10c, c11b, c11c,
                              night_min, night_max, c13, c14) {
         list(label=label, fast_skip=FALSE,
-             night_req=night_req, roam_obj=TRUE, pp_red=pp_red, allow_pto=allow_pto,
+             night_req=night_req, roam_obj=TRUE, pp_red=pp_red,
              c_min=c_min, c8=c8, c8b=c8b, c9=c9, c10=c10, c10c=c10c,
              c11b=c11b, c11c=c11c,
              night_min_hard=night_min, night_max_hard=night_max,
@@ -340,27 +346,23 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         # Nuclear fallbacks
         list(
           mk_nuclear("Drop C13 (min 2 consec nights)",
-                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
+                     night_req=FALSE, pp_red=1L, c_min=TRUE,
                      c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=TRUE,  c11c=TRUE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
           mk_nuclear("Drop C8 + C11b (day→night gap + PP-stretch rule)",
-                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=TRUE,
+                     night_req=FALSE, pp_red=1L, c_min=TRUE,
                      c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=TRUE,
                      night_min=NULL, night_max=NULL, c13=TRUE, c14=TRUE),
           mk_nuclear("Drop C8 + C11b + C13 / drop shift minimums + weekend bounds",
-                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
+                     night_req=FALSE, pp_red=1L, c_min=FALSE,
                      c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
           mk_nuclear("Drop C8 + C11b + C13 + C10",
-                     night_req=FALSE, pp_red=1L, allow_pto=FALSE, c_min=FALSE,
-                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
-                     night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
-          mk_nuclear("PTO credits for staff with >4 off/vac days in PP",
-                     night_req=FALSE, pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
+                     night_req=FALSE, pp_red=1L, c_min=FALSE,
                      c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
           mk_nuclear("Hard coverage only (C1-C7, C11, C12)",
-                     night_req=TRUE,  pp_red=0L, allow_pto=TRUE,  c_min=FALSE,
+                     night_req=TRUE,  pp_red=0L, c_min=FALSE,
                      c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=FALSE)
         )
@@ -386,7 +388,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c15          = TRUE,          # no isolated single shifts
       add_c16          = TRUE,          # no isolated 2-day blocks of day shifts (min run 3)
       add_c_min        = TRUE,          # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
-      allow_pto        = FALSE,         # credit off/vac days as PTO when blocked_days > 4
+      pto_level        = 0L,            # 0=none; 1=1d for ≥5 off/vac; 2=2d for ≥7, 1d for 5-6 (density-gated)
       max_iso_per_person       = NULL,       # NULL = unlimited; integer = max isolated single shifts per person
       max_short_per_person     = NULL,       # NULL = unlimited; integer = max short runs (len 1 or 2) per person
       max_unstaffed_per_month  = NULL,       # NULL = unlimited; integer = max unstaffed night slots per calendar month
@@ -693,14 +695,22 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           di_pp   <- which(dates_vec %in% pp_d)
           pto_credit <- 0L
-          if (allow_pto && length(di_pp) > 0L) {
-            pdata    <- self$time_off[[person]]
-            pp_dates <- pp_d[pp_d %in% dates_vec]
-            n_offvac <- if (nrow(pdata) == 0L) 0L else
-              sum(vapply(pp_dates, function(d)
-                any(pdata$date == d & pdata$type %in% c("off", "vac")),
-                logical(1L)))
-            if (n_offvac > 4L) pto_credit <- n_offvac - 4L
+          if (pto_level > 0L && length(di_pp) > 0L) {
+            tgt      <- self$targets[[person]][[pp_name]]
+            dense    <- (tgt$avail - tgt$sched_target) <= 3L
+            if (dense) {
+              pdata    <- self$time_off[[person]]
+              pp_dates <- pp_d[pp_d %in% dates_vec]
+              n_offvac <- if (nrow(pdata) == 0L) 0L else
+                sum(vapply(pp_dates, function(d)
+                  any(pdata$date == d & pdata$type %in% c("off", "vac")),
+                  logical(1L)))
+              pto_credit <- if (pto_level == 1L) {
+                if (n_offvac >= 5L) 1L else 0L
+              } else {
+                if (n_offvac >= 7L) 2L else if (n_offvac >= 5L) 1L else 0L
+              }
+            }
           }
           cap <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
                           pp_cap_reduction - pto_credit)
@@ -1233,6 +1243,41 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                       }))
 
       list(sol = sol, nP = nP, nD = nD, nX = nX, xidx = xidx, dates_vec = dates_vec)
+    },
+
+    # ── Record which off/vac dates were credited as PTO for each person-PP ──────
+    populate_granted_pto = function(pto_level) {
+      if (pto_level == 0L) return(invisible(NULL))
+      dates_vec <- as.Date(self$dates, origin = "1970-01-01")
+      for (person in STAFF) {
+        pdata <- self$time_off[[person]]
+        for (pp_name in PAY_PERIODS$name) {
+          tgt <- self$targets[[person]][[pp_name]]
+          if (is.null(tgt)) next
+          dense <- (tgt$avail - tgt$sched_target) <= 3L
+          if (!dense) next
+          pp_d   <- pp_dates(pp_name)
+          pp_in  <- pp_d[pp_d %in% dates_vec]
+          n_offvac <- if (is.null(pdata) || nrow(pdata) == 0L) 0L else
+            sum(vapply(pp_in,
+                       function(d) any(pdata$date == d & pdata$type %in% c("off", "vac")),
+                       logical(1L)))
+          pto_credit <- if (pto_level == 1L) {
+            if (n_offvac >= 5L) 1L else 0L
+          } else {
+            if (n_offvac >= 7L) 2L else if (n_offvac >= 5L) 1L else 0L
+          }
+          if (pto_credit == 0L) next
+          offvac_dates <- sort(pp_in[vapply(pp_in,
+            function(d) !is.null(pdata) && nrow(pdata) > 0L &&
+              any(pdata$date == d & pdata$type %in% c("off", "vac")),
+            logical(1L))])
+          credited <- head(offvac_dates, pto_credit)
+          self$granted_pto[[person]] <- sort(unique(c(
+            self$granted_pto[[person]], credited)))
+        }
+      }
+      invisible(NULL)
     },
 
     # ── Translate binary solution vector into schedule data structures ──────────
