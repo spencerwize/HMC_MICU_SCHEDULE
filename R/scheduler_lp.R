@@ -53,7 +53,8 @@
 #   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
 #   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
-#   C10c  8-day density cap:  Σ_{k=0}^7 work[p,d+k]       ≤ 6
+#   C10c  Density caps: ≤5 in 7/8-day windows; ≤6 in 9-day; ≤7 in 10-day
+#         (PTO-credited staff get +pto_credit headroom per window)
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
 #   C11b  No night stretch in consecutive PPs: Σ_{d∈PP_k∪PP_{k+1}} s[p,d] ≤ 1  (s = stretch-start)
 #   C11c  Weekend hard bounds: MIN_WKND_HARD ≤ Σ_{d∈Sat/Sun} work[p,d] ≤ MAX_WKND_HARD
@@ -378,7 +379,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c8b          = TRUE,          # Day→Night 2d gap: x[p,d,s] + x[p,d+2,Night] ≤ 1
       add_c9           = TRUE,
       add_c10          = TRUE,
-      add_c10c         = TRUE,          # 8-day density cap: ≤ 6 shifts in any 8-day window
+      add_c10c         = TRUE,          # density caps: ≤5 in 7/8-day windows, ≤6 in 9-day, ≤7 in 10-day
       add_c11b         = TRUE,          # no night stretch in consecutive PPs
       add_c11c         = TRUE,          # weekend hard bounds: MIN_WKND_HARD ≤ total ≤ MAX_WKND_HARD
       night_min_hard   = MIN_NIGHTS_HARD, # lower hard bound on per-person night total (NULL = no bound)
@@ -688,6 +689,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] ≤ sched_target[p,PP] ────────
+      pto_credit_mat <- matrix(0L, nP, nrow(PAY_PERIODS))  # [pi, ppi] used in C10c + C_min
       for (pi in seq_len(nP)) {
         person <- STAFF[pi]
         for (ppi in seq_len(nrow(PAY_PERIODS))) {
@@ -715,6 +717,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
               }
             }
           }
+          pto_credit_mat[pi, ppi] <- pto_credit
           cap <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
                           pp_cap_reduction - pto_credit)
           if (length(di_pp) == 0 || cap <= 0) next
@@ -725,19 +728,25 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── C_min: Minimum shifts per PP for all staff ──────────────────────────────
-      # Enforces Σ x[p,PP] ≥ soft_min for every person.
-      # Non-FLEX staff: soft_min = sched_target (must hit full target).
-      # FLEX_TARGETS (e.g. Todd): soft_min = FLEX_TARGETS value (e.g. 4).
-      # Skipped when person has fewer available days than their soft_min.
+      # Non-FLEX staff (everyone except Todd): exactly sched_target - pp_red - pto_credit
+      #   worked shifts (PTO days count toward the 6-shift total, so worked = 6 - pto).
+      # FLEX_TARGETS (Todd): soft_min floor only (stays flexible 4–6).
+      # Skipped when person has fewer available days than their floor.
       if (add_c_min) {
         for (pi in seq_len(nP)) {
           person <- STAFF[pi]
+          is_flex <- person %in% names(FLEX_TARGETS)
           for (ppi in seq_len(nrow(PAY_PERIODS))) {
             pp_name <- PAY_PERIODS$name[ppi]
             pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
             di_pp   <- which(dates_vec %in% pp_d)
             t_info  <- self$targets[[person]][[pp_name]]
-            sm      <- min(t_info$soft_min, t_info$avail)
+            sm <- if (is_flex) {
+              min(t_info$soft_min, t_info$avail)
+            } else {
+              min(max(0L, t_info$sched_target - pp_cap_reduction -
+                           pto_credit_mat[pi, ppi]), t_info$avail)
+            }
             if (sm <= 0L || length(di_pp) == 0L) next
             cols <- as.integer(unlist(lapply(di_pp, function(di)
               vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
@@ -856,28 +865,40 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C10c: 8-day density cap — Σ_{k=0}^7 work[p,d+k] ≤ 6 ────────────────
-      if (add_c10c && nD >= 8L) {
-        for (pi in seq_len(nP)) {
-          for (di in seq_len(nD - 7L)) {
-            cols <- vapply(0:7, function(k) widx(pi, di + k), integer(1L))
-            add_con(cols, rep(1L, 8L), "<=", 6L)
+      # ── C10c: Multi-window density caps ──────────────────────────────────────
+      # ≤5 in any 7-day window, ≤5 in any 8-day window,
+      # ≤6 in any 9-day window, ≤7 in any 10-day window.
+      # PTO-credited staff get base_cap + pto_credit_vec[pi] headroom per window.
+      if (add_c10c) {
+        density_windows <- list(
+          list(W = 7L, B = 5L),
+          list(W = 8L, B = 5L),
+          list(W = 9L, B = 6L),
+          list(W = 10L, B = 7L)
+        )
+        for (dw in density_windows) {
+          W <- dw$W; B <- dw$B
+          if (nD < W) next
+          for (pi in seq_len(nP)) {
+            cap_p <- B + max(pto_credit_mat[pi, ])
+            for (di in seq_len(nD - W + 1L)) {
+              cols <- vapply(0:(W - 1L), function(k) widx(pi, di + k), integer(1L))
+              add_con(cols, rep(1L, W), "<=", cap_p)
+            }
           }
-        }
-      }
-
-      # ── C10cx: Cross-boundary 8-day density cap ──────────────────────────────
-      # Handles windows that include prior-schedule work days.
-      if (add_c10c && ps_has_prior && nD >= 1L) {
-        for (pi in seq_len(nP)) {
-          for (k in 1L:min(7L, nD)) {
-            pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
-            pre_count <- as.integer(sum(pre_dates %in% .ps_all[[pi]]))
-            if (pre_count == 0L) next
-            j_max <- 8L - k
-            if (j_max < 1L) next
-            cols <- vapply(seq_len(j_max), function(j) widx(pi, j), integer(1L))
-            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 6L - pre_count))
+          if (ps_has_prior && nD >= 1L) {
+            for (pi in seq_len(nP)) {
+              cap_p <- B + max(pto_credit_mat[pi, ])
+              for (k in 1L:min(W - 1L, nD)) {
+                pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
+                pre_count <- as.integer(sum(pre_dates %in% .ps_all[[pi]]))
+                if (pre_count == 0L) next
+                j_max <- W - k
+                if (j_max < 1L) next
+                cols <- vapply(seq_len(j_max), function(j) widx(pi, j), integer(1L))
+                add_con(cols, rep(1L, length(cols)), "<=", max(0L, cap_p - pre_count))
+              }
+            }
           }
         }
       }
