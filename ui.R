@@ -69,12 +69,14 @@ ui <- page_navbar(
           tags$ul(
             tags$li(strong("Day shift:"), " 6:30 AM – 6:30 PM  (APP1, APP2, Roaming APP)"),
             tags$li(strong("Night shift:"), " 6:30 PM – 6:30 AM  (1 slot)"),
-            tags$li("Target: 6 shifts per person per pay period"),
+            tags$li("Target: 6 shifts per person per pay period; Todd minimum 4, maximum 6"),
+            tags$li("Shifts run in blocks of 3–4 consecutive days; no isolated single shifts"),
+            tags$li("Night shifts preferred in 3-packs; no night shift the day before off/vacation"),
             tags$li("Fixed holiday assignments pre-seeded")
           ),
           hr(),
           fluidRow(
-            column(4,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_days"),   class = "text-primary mb-0"),
@@ -82,29 +84,55 @@ ui <- page_navbar(
                 )
               )
             ),
-            column(4,
+            column(6,
               card(class = "text-center",
                 card_body(
                   h2(textOutput("stat_shifts"), class = "text-primary mb-0"),
                   p("Total Shifts Scheduled",    class = "text-muted small")
                 )
               )
-            ),
-            column(4,
-              card(class = "text-center",
-                card_body(
-                  h2(textOutput("stat_errors"), class = "text-danger mb-0"),
-                  p("Hard Constraint Errors",    class = "text-muted small")
-                )
-              )
+            )
+          ),
+          conditionalPanel(
+            "output.schedule_ready",
+            fluidRow(
+              class = "mt-3",
+              column(4, card(card_body(uiOutput("stat_nights")))),
+              column(4, card(card_body(uiOutput("stat_weekends")))),
+              column(4, card(card_body(uiOutput("stat_coverage"))))
             )
           ),
           br(),
           conditionalPanel(
             "output.schedule_ready",
+            uiOutput("validation_ui")
+          ),
+          br(),
+          conditionalPanel(
+            "output.schedule_ready",
             card(
-              card_header("Validation Results"),
-              card_body(uiOutput("validation_ui"))
+              card_header("Viable Schedules"),
+              card_body(
+                p(class = "text-muted small",
+                  "Counts how many distinct shift assignments satisfy all active constraints ",
+                  "at the tier level used to generate this schedule. Each trial re-solves the ",
+                  "full ILP with a no-good cut blocking the previous solution — each solve ",
+                  "takes roughly as long as the original."
+                ),
+                fluidRow(
+                  column(6,
+                    numericInput("count_sol_limit", "Max schedules to find:",
+                      value = 10L, min = 1L, max = 50L, step = 1L)
+                  ),
+                  column(6,
+                    br(),
+                    actionButton("count_sol_btn", "Count Solutions",
+                      icon  = icon("hashtag"),
+                      class = "btn-outline-secondary w-100")
+                  )
+                ),
+                uiOutput("count_sol_ui")
+              )
             )
           )
         )
@@ -211,7 +239,7 @@ ui <- page_navbar(
           plotlyOutput("chart_nights", height = "320px")
         ),
         column(6,
-          h4("Roaming Shifts per Person"),
+          h4("Weekend Shifts per Person"),
           plotlyOutput("chart_roaming", height = "320px")
         )
       ),

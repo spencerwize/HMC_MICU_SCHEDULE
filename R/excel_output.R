@@ -68,7 +68,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
     if (!is.na(typ)) {
-      return(switch(typ, cme = "CME", off = "OFF", vac = "VAC", ""))
+      return(switch(typ, cme = "CME", off = "OFF", vac = "OFF", ""))
     }
     ""
   }
@@ -79,7 +79,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      VAC  = C_PEACH,
       CME  = C_ORANGE, OFF = C_PINK,
       NULL)
   }
@@ -88,7 +87,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      VAC = F_BROWN,
       CME = F_WHITE, OFF = F_RED,
       "#000000")
   }
@@ -115,6 +113,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     any(vapply(dbn_set, function(x) x$date == d && x$person == person, logical(1L)))
 
   N_STAFF <- length(STAFF)
+  N_HDR   <- 7L
   N_PP    <- nrow(PAY_PERIODS)
 
   # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
@@ -308,10 +307,15 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
           }
           writeFormula(wb, "Calendar", x = fml,
             startRow = role_row, startCol = col)
+          # Yellow dotted border when APP3 slot is empty this day (schedule-level)
+          app3_empty <- is.na(sched_obj$schedule[[ds]]$Roaming)
           addStyle(wb, "Calendar",
             mk(fg = bg_r, bold = TRUE, font_color = F_BLUE, size = 10,
                halign = "center", valign = "center",
-               border = "All", border_color = "#D0D0D0", wrap = TRUE),
+               border = "All",
+               border_color = if (app3_empty) "#FFD700" else "#D0D0D0",
+               border_style = if (app3_empty) "dotted"  else "thin",
+               wrap = TRUE),
             rows = role_row, cols = col)
         }
       }
@@ -331,7 +335,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
     x = paste0("APP1 / APP2 / APP 3 = day shift  \u00B7  Night = night shift  ",
-               "\u00B7  VAC = vacation  \u00B7  CME = conference  \u00B7  OFF = not scheduled"),
+               "\u00B7  CME = conference  \u00B7  OFF = vacation / day off"),
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
@@ -346,6 +350,24 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
     rows = cal_row, cols = 2:8)
   setRowHeights(wb, "Calendar", rows = cal_row, heights = 15.75)
+
+  # Conditional formatting for role cells — fires on formula result so updates
+  # dynamically when the staff dropdown in C2 changes.
+  # CF only overrides fill/font; the static dotted border for empty APP3 days
+  # is preserved since these CF styles don't include a border definition.
+  cf_end <- cal_row
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "APP",
+    style = createStyle(fgFill = C_GREEN, fontColour = F_BLUE,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "Night",
+    style = createStyle(fgFill = C_NIGHT, fontColour = F_NAVY,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+    type = "contains", rule = "OFF",
+    style = createStyle(fgFill = C_PINK, fontColour = F_RED,
+                        textDecoration = "bold", halign = "center"))
 
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 2 · Summary
@@ -389,6 +411,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       targets[[person]][[pp]]$credited))
     pdata   <- time_off[[person]]
     n_vac   <- sum(pdata$type == "vac", na.rm = TRUE)
+    n_off   <- sum(pdata$type == "off", na.rm = TRUE)
     n_pto   <- 0L
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
@@ -409,7 +432,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       n_wknd   = sum(is_weekend(shifts$date)) + sum(is_weekend(nights)),
       n_cred   = n_cred,
       n_total  = nrow(shifts) + length(nights) + n_cred,
-      n_vac    = n_vac,
+      n_reqoff = n_vac + n_off,
       n_pto    = n_pto,
       n_bump   = n_bump)
   })
@@ -442,7 +465,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Night Shifts",             "n_night",  "#FFFFFF",  FALSE),
     list("APP 3 Shifts",             "n_roam",   C_GRAY_LT, FALSE),
     list("Weekend Shifts",           "n_wknd",   "#FFFFFF",  FALSE),
-    list("Vacation Days",            "n_vac",    C_PEACH,    FALSE),
+    list("Req. Off Days",             "n_reqoff", C_PEACH,    FALSE),
     list("Shortfall (shift-days)",   "n_bump",   "#FFFFFF",  FALSE))
 
   for (ov in ovr_rows) {
@@ -459,9 +482,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       cfc    <- F_NAVY
       cbold  <- FALSE
       if (cred_flag  && val > 0) { cbg <- C_ORANGE; cfc <- F_WHITE; cbold <- TRUE }
-      if (key == "n_pto"  && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;  cbold <- TRUE }
-      if (key == "n_bump" && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000"; cbold <- TRUE }
-      if (key == "n_vac"  && val > 0) { cbg <- C_PEACH;  cfc <- F_BROWN }
+      if (key == "n_pto"    && val > 0) { cbg <- "#FF9999"; cfc <- F_RED;  cbold <- TRUE }
+      if (key == "n_bump"  && val > 0) { cbg <- "#FFE0E0"; cfc <- "#C00000"; cbold <- TRUE }
+      if (key == "n_reqoff" && val > 0) { cbg <- C_PEACH; cfc <- F_BROWN }
       writeData(wb, "Summary", x = val,
         startRow = srow, startCol = 1L + ci, colNames = FALSE)
       addStyle(wb, "Summary",
@@ -668,8 +691,10 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     # APP1 / APP2 / APP3 slot cols (4-6)
     day_vals <- c(app1, app2, roam)
     for (j in 1:3) {
-      val <- day_vals[j]
-      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else bg_day
+      val     <- day_vals[j]
+      is_app3 <- j == 3L
+      cbg <- if (nchar(val) > 0) (if (is_h) C_YELLOW else C_GREEN) else
+             if (is_app3) C_PEACH else bg_day
       cfc <- if (nchar(val) > 0) F_BLUE else F_GRAY
       addStyle(wb, "Schedule",
         mk(fg = cbg, bold = nchar(val) > 0, font_color = cfc,
@@ -718,7 +743,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
   setColWidths(wb, "Schedule",
     cols   = seq_len(N_COLS),
-    widths = c(11, 5, 5, 13, 9, 13, 13, rep(9, N_STAFF), 18))
+    widths = c(14, 7, 7, 16, 14, 16, 16, rep(13, N_STAFF), 20))
 
   # ── Save ───────────────────────────────────────────────────────────────────
   saveWorkbook(wb, output_path, overwrite = TRUE)

@@ -37,18 +37,30 @@ compute_targets <- function(time_off) {
           # the 6-shift target.  Only hard-OFF days and CME days affect the target.
           # If a person can't reach 6 due to too many VAC days, cleanup_pass will
           # grant PTO credits to cover the shortfall.
+          bt <- BASE_TARGETS[[person]]
+          base_target <- if (is.null(bt)) {
+            6L
+          } else if (is.list(bt)) {
+            if (!is.null(bt[[pp_name]])) as.integer(bt[[pp_name]]) else 6L
+          } else {
+            as.integer(bt)
+          }
           avail_for_target <- sum(!p_dates %in% unique(c(off_days, cme_days)))
-          base   <- min(6L, avail_for_target + credited)
-          target <- if (avail_for_target >= 6L) 6L else base
+          base   <- min(base_target, avail_for_target + credited)
+          target <- if (avail_for_target >= base_target) base_target else base
           sched_target <- max(0L, target - credited)
 
           # soft_min: scheduling urgency drops once this floor is reached.
           # The person can still receive up to sched_target shifts; they are
           # simply deprioritised relative to people below their own soft_min.
           flex_floor <- FLEX_TARGETS[[person]]
-          soft_min   <- if (!is.null(flex_floor))
+          soft_min   <- if (!is.null(flex_floor)) {
                           max(0L, min(as.integer(flex_floor), sched_target))
-                        else sched_target
+                        } else {
+                          heavy_off <- (length(off_days) + length(vac_days)) >= 5L
+                          floor_val <- if (heavy_off) 4L else DEFAULT_SOFT_MIN
+                          max(0L, min(floor_val, sched_target))
+                        }
 
           list(
             pp_name      = pp_name,
@@ -83,9 +95,36 @@ targets_summary_df <- function(targets) {
         credited     = info$credited,
         target       = info$target,
         sched_target = info$sched_target,
+        soft_min     = info$soft_min,
         stringsAsFactors = FALSE
       )
     })
   })
   do.call(rbind, unlist(rows, recursive = FALSE))
+}
+
+#' Per-PP staffing balance: slot capacity vs shift demand vs available person-days
+staffing_balance_df <- function(targets) {
+  do.call(rbind, lapply(seq_len(nrow(PAY_PERIODS)), function(i) {
+    pp_name  <- PAY_PERIODS$name[i]
+    pp_start <- PAY_PERIODS$start[i]
+    pp_end   <- PAY_PERIODS$end[i]
+    n_days   <- as.integer(pp_end - pp_start + 1L)
+    capacity <- n_days * 4L
+
+    demand     <- sum(vapply(STAFF, function(p) targets[[p]][[pp_name]]$sched_target, integer(1L)))
+    staff_days <- sum(vapply(STAFF, function(p) targets[[p]][[pp_name]]$avail,        integer(1L)))
+    slack      <- staff_days - demand
+
+    data.frame(
+      PP         = pp_name,
+      Days       = n_days,
+      Capacity   = capacity,
+      Demand     = demand,
+      Staff_Days = staff_days,
+      Slack      = slack,
+      Status     = if (slack < 0L) "IMPOSSIBLE" else if (slack <= 5L) "TIGHT" else "OK",
+      stringsAsFactors = FALSE
+    )
+  }))
 }

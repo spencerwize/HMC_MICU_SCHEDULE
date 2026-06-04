@@ -12,7 +12,8 @@ pkgs <- c(
   "tidyr",       # Data reshaping
 
   # ILP scheduler (SchedulerLP)
-  "lpSolveAPI",  # R interface to the lp_solve 5.5 MIP solver
+  "highs",       # HiGHS MIP solver (fast, modern, open-source)
+  "Matrix",      # sparse matrix for HiGHS constraint matrix
 
   # Shiny app
   "shiny",       # Web app framework

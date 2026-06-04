@@ -5,16 +5,16 @@
 server <- function(input, output, session) {
 
   # ── Populate sheet dropdown on startup ────────────────────────────────────
-  # Tries to refresh tab names live from the API; falls back to TIMEOFF_SHEETS
-  # so the dropdown is always usable even without API auth.
+  # Runs once; isolate() prevents googlesheets4 auth internals from creating
+  # a reactive dependency that would re-trigger this observer later.
   observe({
-    sheet_names <- tryCatch({
+    sheet_names <- isolate(tryCatch({
       gs4_auth_auto()
       googlesheets4::sheet_names(TIMEOFF_GSHEET_URL)
     }, error = function(e) {
       message("Could not fetch sheet names from API — using default list.")
       TIMEOFF_SHEETS
-    })
+    }))
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
@@ -36,8 +36,16 @@ server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
-  # ── Reactive pipeline ──────────────────────────────────────────────────────
-  pipeline <- eventReactive(input$run_btn, {
+  # ── Schedule result store ──────────────────────────────────────────────────
+  # Using reactiveVal + observeEvent (not eventReactive) so the result is only
+  # ever set by an explicit button click; it cannot be re-triggered by reactive
+  # invalidation from googlesheets4 auth internals or any other side-effect.
+  pipeline <- reactiveVal(NULL)
+
+  observeEvent(input$run_btn, {
+    shinyjs::disable("run_btn")
+    on.exit(shinyjs::enable("run_btn"), add = TRUE)
+
     # Apply sheet-specific constants before any pipeline step so that
     # SCHEDULE_START / SCHEDULE_END / PAY_PERIODS / HOLIDAYS reflect the
     # currently selected sheet rather than the April–July defaults.
@@ -77,14 +85,15 @@ server <- function(input, output, session) {
         selected = STAFF[1]
       )
 
-      list(
+      pipeline(list(
         sched      = sched,
         time_off   = time_off,
         targets    = targets,
         validation = validation,
+        tier_used  = sched$tier_used,
         df         = sched$to_dataframe(),
         grid       = sched$to_person_grid(time_off, targets)
-      )
+      ))
     })
   })
 
@@ -123,36 +132,73 @@ server <- function(input, output, session) {
     as.character(n)
   })
 
-  output$stat_errors <- renderText({
+  output$stat_nights <- renderUI({
     req(pipeline())
-    as.character(length(pipeline()$validation$errors))
+    p  <- pipeline()
+    ct <- vapply(STAFF, function(x) length(p$sched$person_nights[[x]]), integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Night Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
+    )
+  })
+
+  output$stat_weekends <- renderUI({
+    req(pipeline())
+    p      <- pipeline()
+    all_d  <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_d <- all_d[weekdays(all_d) %in% c("Saturday", "Sunday")]
+    ct <- vapply(STAFF, function(x) {
+      sh <- p$sched$person_shifts[[x]]
+      if (nrow(sh) == 0L) return(0L)
+      as.integer(sum(sh$date %in% wknd_d))
+    }, integer(1L))
+    mx <- max(ct); mn <- min(ct)
+    mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Weekend Shifts"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Max:"), tags$span(sprintf("%d  (%s)", mx, mxp), class = "text-primary fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Min:"), tags$span(sprintf("%d  (%s)", mn, mnp), class = "text-primary fw-bold"))
+    )
+  })
+
+  output$stat_coverage <- renderUI({
+    req(pipeline())
+    p      <- pipeline()
+    all_ds <- as.character(as.Date(p$sched$dates, origin = "1970-01-01"))
+    sched  <- p$sched$schedule
+    empty  <- function(x) is.null(x) || is.na(x) || x == ""
+    unstaffed <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Night),   logical(1L)))
+    no_roam   <- sum(vapply(all_ds, function(d) empty(sched[[d]]$Roaming), logical(1L)))
+    tagList(
+      tags$p(class = "text-muted small mb-2 fw-semibold", "Coverage Gaps"),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("Unstaffed nights:"),
+        tags$span(as.character(unstaffed),
+          class = if (unstaffed == 0L) "text-success fw-bold" else "text-danger fw-bold")),
+      tags$div(class = "d-flex justify-content-between",
+        tags$span("No APP3 days:"),
+        tags$span(as.character(no_roam),
+          class = if (no_roam == 0L) "text-success fw-bold" else "text-warning fw-bold"))
+    )
   })
 
   output$validation_ui <- renderUI({
     req(pipeline())
-    v <- pipeline()$validation
-    errs  <- v$errors
-    warns <- v$warnings
-
-    err_ui <- if (length(errs) == 0) {
-      tags$div(class = "alert alert-success",
-        icon("check-circle"), " No hard constraint violations.")
-    } else {
-      tags$div(class = "alert alert-danger",
-        tags$strong(sprintf("%d constraint error(s):", length(errs))),
-        tags$ul(lapply(errs, tags$li))
-      )
-    }
-
-    warn_ui <- if (length(warns) == 0) NULL else {
-      tags$div(class = "alert alert-warning mt-2",
-        tags$strong(sprintf("%d warning(s):", length(warns))),
-        tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
-        if (length(warns) > 20)
-          tags$li(sprintf("… and %d more", length(warns) - 20))
-      )
-    }
-    tagList(err_ui, warn_ui)
+    warns <- pipeline()$validation$warnings
+    if (length(warns) == 0) return(NULL)
+    tags$div(class = "alert alert-warning",
+      tags$strong(sprintf("%d warning(s):", length(warns))),
+      tags$ul(lapply(warns[seq_len(min(20, length(warns)))], tags$li)),
+      if (length(warns) > 20)
+        tags$li(sprintf("… and %d more", length(warns) - 20))
+    )
   })
 
   # ── Download Excel ────────────────────────────────────────────────────────
@@ -225,7 +271,7 @@ server <- function(input, output, session) {
             role <- switch(typ,
               cme = "CME",
               off = "OFF",
-              vac = "VAC",
+              vac = "OFF",
               ""
             )
           }
@@ -237,7 +283,6 @@ server <- function(input, output, session) {
           APP2    = if (is_hol) "#FFFF99" else "#92D050",
           "APP 3" = if (is_hol) "#FFFF99" else "#92D050",
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
-          VAC     = "#FFD966",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
@@ -307,8 +352,8 @@ server <- function(input, output, session) {
     role_colors <- c(
       APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
       Night   = "#BDD7EE",
-      VAC     = "#FFD966", CME  = "#FF6D01",
-      OFF     = "#FFC7CE"
+      CME  = "#FF6D01",
+      OFF  = "#FFC7CE"
     )
 
     wide <- grid %>%
@@ -319,6 +364,13 @@ server <- function(input, output, session) {
         values_from = role
       ) %>%
       arrange(date)
+
+    # Flag days where no one is assigned to APP 3
+    staff_present <- STAFF[STAFF %in% names(wide)]
+    wide$app3_open <- apply(
+      wide[, staff_present, drop = FALSE], 1,
+      function(row) !any(row == "APP 3", na.rm = TRUE)
+    )
 
     # Make cell colour helper
     make_col <- function(person_name) {
@@ -341,6 +393,18 @@ server <- function(input, output, session) {
 
     person_cols <- setNames(lapply(STAFF, make_col), STAFF)
 
+    app3_col <- colDef(
+      name  = "APP3",
+      width = 46,
+      style = function(value) {
+        if (isTRUE(value))
+          list(background = "#FCE4D6", textAlign = "center")
+        else
+          list(background = "#E2EFDA", textAlign = "center")
+      },
+      cell = function(value) if (isTRUE(value)) "\u2205" else "\u2713"
+    )
+
     date_col <- colDef(
       name = "Date",
       width = 90,
@@ -352,9 +416,10 @@ server <- function(input, output, session) {
       wide,
       columns = c(
         list(
-          date     = date_col,
-          day_name = colDef(name = "Day", width = 40),
-          pp       = colDef(name = "PP",  width = 45),
+          date      = date_col,
+          day_name  = colDef(name = "Day",  width = 40),
+          pp        = colDef(name = "PP",   width = 45),
+          app3_open = app3_col,
           is_holiday = colDef(show = FALSE),
           is_weekend = colDef(show = FALSE)
         ),
@@ -435,20 +500,34 @@ server <- function(input, output, session) {
 
   output$chart_roaming <- renderPlotly({
     req(pipeline())
-    p <- pipeline()
+    p         <- pipeline()
+    all_dates <- as.Date(p$sched$dates, origin = "1970-01-01")
+    wknd_dates <- all_dates[weekdays(all_dates) %in% c("Saturday", "Sunday")]
     df <- data.frame(
-      person = STAFF,
-      roam   = sapply(STAFF, function(x)
-        sum(p$sched$person_shifts[[x]]$slot == "Roaming")),
+      person  = STAFF,
+      weekend = sapply(STAFF, function(x) {
+        sh <- p$sched$person_shifts[[x]]
+        if (nrow(sh) == 0L) return(0L)
+        sum(sh$date %in% wknd_dates)
+      }),
       stringsAsFactors = FALSE
     )
-    plot_ly(df, x = ~person, y = ~roam, type = "bar",
-            marker = list(color = "#92D050",
-                          line = list(color = "#5A9E2F", width = 1.5))) %>%
+    plot_ly(df, x = ~person, y = ~weekend, type = "bar",
+            marker = list(color = "#2E75B6",
+                          line = list(color = "#1A4D8C", width = 1.5))) %>%
       layout(
         xaxis = list(title = "", tickangle = -30),
-        yaxis = list(title = "Roaming Shifts"),
-        showlegend = FALSE
+        yaxis = list(title = "Weekend Shifts",
+                     range = list(0, max(20, max(df$weekend) + 1))),
+        showlegend = FALSE,
+        shapes = list(
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MIN_WKND_HARD, y1 = MIN_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5)),
+          list(type = "line", x0 = -0.5, x1 = nrow(df) - 0.5,
+               y0 = MAX_WKND_HARD, y1 = MAX_WKND_HARD,
+               line = list(color = "red", dash = "dot", width = 1.5))
+        )
       ) %>%
       config(displayModeBar = FALSE)
   })
@@ -472,6 +551,7 @@ server <- function(input, output, session) {
 
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
+        actual < soft_min     ~ "Below minimum",
         actual < sched_target ~ "Under",
         actual > sched_target ~ "Over",
         TRUE                  ~ "On target"
@@ -485,14 +565,16 @@ server <- function(input, output, session) {
         credited     = colDef(name = "CME Credited", width = 100),
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
+        soft_min     = colDef(name = "Min Floor",    width = 80),
         actual       = colDef(name = "Actual",       width = 70),
-        status       = colDef(name = "Status",       width = 90,
+        status       = colDef(name = "Status",       width = 115,
           style = function(value) {
             list(
-              color      = switch(value,
-                "Under"     = "#CC0000",
-                "Over"      = "#0066CC",
-                "On target" = "#009900",
+              color = switch(value,
+                "Below minimum" = "#990000",
+                "Under"         = "#CC6600",
+                "Over"          = "#0066CC",
+                "On target"     = "#009900",
                 "#000"),
               fontWeight = "bold"
             )
@@ -508,5 +590,34 @@ server <- function(input, output, session) {
                            fontWeight = "bold")
       )
     )
+  })
+
+  # ── Count viable schedules (no-good cut enumeration) ──────────────────────
+  count_sol_result <- reactiveVal(NULL)
+
+  observeEvent(input$count_sol_btn, {
+    req(pipeline())
+    sched <- pipeline()$sched
+    lim   <- as.integer(input$count_sol_limit)
+    count_sol_result(NULL)
+    withProgress(message = sprintf("Counting schedules (up to %d)…", lim), value = 0.1, {
+      n <- sched$count_solutions(max_count = lim)
+    })
+    count_sol_result(list(n = n, lim = lim))
+  })
+
+  output$count_sol_ui <- renderUI({
+    res <- count_sol_result()
+    if (is.null(res)) return(NULL)
+    if (res$n >= res$lim) {
+      msg <- sprintf(
+        "Found at least %d distinct feasible schedules (limit reached — there may be more).",
+        res$n)
+      cls <- "alert alert-info mt-2"
+    } else {
+      msg <- sprintf("Found exactly %d distinct feasible schedule(s) satisfying all active constraints.", res$n)
+      cls <- "alert alert-success mt-2"
+    }
+    tags$div(class = cls, tags$strong(msg))
   })
 }
