@@ -47,6 +47,10 @@ ui <- page_navbar(
           "Select the pay-period sheet from the Google Sheet."
         ),
         hr(),
+        checkboxInput("run_faster", "Fast mode (skip min-run tiers)", value = FALSE),
+        tags$small(class = "text-muted d-block mb-2",
+          "Skips the min-run-3 and min-run-2 tiers in each block. Faster but may produce more short runs."
+        ),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",

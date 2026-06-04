@@ -139,7 +139,7 @@ server <- function(input, output, session) {
       }
 
       sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule)
-      sched$run()
+      sched$run(run_faster = isTRUE(input$run_faster))
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
