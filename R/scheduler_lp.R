@@ -124,11 +124,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Main entry point ──────────────────────────────────────────────────────
-    run = function() {
+    run = function(run_faster = FALSE) {
       if (!requireNamespace("highs", quietly = TRUE))
         stop("highs package is not installed. Run: install.packages('highs')")
 
       tiers <- private$RELAX_TIERS
+      if (run_faster) tiers <- Filter(function(t) !isTRUE(t$fast_skip), tiers)
       nT    <- length(tiers)
 
       for (ti in seq_len(nT)) {
@@ -282,30 +283,31 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
     # ── Score candidate after APP3 fill by shift-evenness ─────────────────────
     # Populates the schedule, runs greedy APP3 fill, then resets to empty.
-    # ── Relaxation cascade: 6 blocks × 5 tiers + nuclear fallbacks ───────────
-    # Each block repeats the same 5-tier internal structure (run constraints),
-    # varying only night_req and night_min_hard/night_max_hard.
-    # Internal tiers per block:
-    #   A – Full model (min run 3 days)
-    #   B – Max 1 short run (len 1 or 2)
-    #   C – Max 2 short runs
-    #   D – Max 3 short runs
-    #   E – Run >= 2 days
+    # ── Relaxation cascade: 6 blocks × 3 tiers + nuclear fallbacks ───────────
+    # Each block repeats the same 3-tier run-length ladder, varying only
+    # night_req and night_min_hard/night_max_hard across blocks.
+    #
+    # Internal tiers per block (preference order: 3-run > 2-run > 4-run > 1-off):
+    #   A (fast_skip) – Min run ≥ 3  (hard: C15+C16)
+    #   B (fast_skip) – Min run ≥ 2  (hard: C15 only; no isolated singles)
+    #   C             – Any run length (objective drives 3 > 2 > 4 > 1 preference)
+    #
+    # run(run_faster=TRUE) skips all fast_skip tiers, jumping straight to C per block.
     RELAX_TIERS = {
       mk <- function(label, night_req, night_min, night_max,
-                     c15, c16, max_iso, max_short, unstaffed_mo_cap) {
-        list(label=label,
+                     c15, c16, unstaffed_mo_cap, fast_skip = FALSE) {
+        list(label=label, fast_skip=fast_skip,
              night_req=night_req, roam_obj=TRUE, pp_red=0L, allow_pto=FALSE, c_min=TRUE,
              c8=TRUE,  c8b=TRUE,  c9=TRUE, c10=TRUE, c10c=TRUE, c11b=TRUE, c11c=TRUE,
              c13=TRUE, c14=TRUE,
              night_min_hard=night_min, night_max_hard=night_max,
-             c15=c15, c16=c16, max_iso=max_iso, max_short=max_short,
+             c15=c15, c16=c16, max_iso=NULL, max_short=NULL,
              unstaffed_mo_cap=unstaffed_mo_cap)
       }
       mk_nuclear <- function(label, night_req, pp_red, allow_pto, c_min,
                              c8, c8b, c9, c10, c10c, c11b, c11c,
                              night_min, night_max, c13, c14) {
-        list(label=label,
+        list(label=label, fast_skip=FALSE,
              night_req=night_req, roam_obj=TRUE, pp_red=pp_red, allow_pto=allow_pto,
              c_min=c_min, c8=c8, c8b=c8b, c9=c9, c10=c10, c10c=c10c,
              c11b=c11b, c11c=c11c,
@@ -314,14 +316,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
              c15=FALSE, c16=FALSE, max_iso=NULL, max_short=NULL,
              unstaffed_mo_cap=NULL)
       }
-      # Helper: generate the 5-tier block with given night settings
+      # 3-tier block: A=min-run-3, B=min-run-2, C=any-run-length
       block <- function(blabel, night_req, night_min, night_max, unstaffed_mo_cap) {
         list(
-          mk(sprintf("[%s] Full model — all run rules",          blabel), night_req, night_min, night_max, TRUE,  TRUE,  NULL, NULL, unstaffed_mo_cap),
-          mk(sprintf("[%s] Max 1 short run/person",              blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 1L,   unstaffed_mo_cap),
-          mk(sprintf("[%s] Max 2 short runs/person",             blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 2L,   unstaffed_mo_cap),
-          mk(sprintf("[%s] Max 3 short runs/person",             blabel), night_req, night_min, night_max, FALSE, FALSE, NULL, 3L,   unstaffed_mo_cap),
-          mk(sprintf("[%s] Run >= 2 days",                       blabel), night_req, night_min, night_max, TRUE,  FALSE, NULL, NULL, unstaffed_mo_cap)
+          mk(sprintf("[%s-A] Min run ≥ 3 days",   blabel), night_req, night_min, night_max, TRUE,  TRUE,  unstaffed_mo_cap, fast_skip=TRUE),
+          mk(sprintf("[%s-B] Min run ≥ 2 days",   blabel), night_req, night_min, night_max, TRUE,  FALSE, unstaffed_mo_cap, fast_skip=TRUE),
+          mk(sprintf("[%s-C] Any run length",      blabel), night_req, night_min, night_max, FALSE, FALSE, unstaffed_mo_cap, fast_skip=FALSE)
         )
       }
       c(
@@ -523,22 +523,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       obj[I_MAX_WKND]   <- -3.0;  obj[I_MIN_WKND]   <- +3.0
       obj[I_MAX_ROAM]   <- -0.5;  obj[I_MIN_ROAM]   <- +0.5
 
-      # Streak preference bonuses/penalties (3-packs most preferred)
-      # Night: reward 3-consecutive (+0.50), penalise 4-consecutive (-0.60)
-      #   Net per streak: 2-nights=0, 3-nights=+0.50, 4-nights=+0.40
-      # Work: reward 3-consecutive (+0.30), penalise 4-consecutive (-0.40)
-      #   Net per streak: 1-day=0, 2-days=0, 3-days=+0.30, 4-days=+0.20
+      # Run-length preferences: 3-consecutive > 2-consecutive > 4-consecutive > isolated
+      # Net objective per run length (work days): 3=+2.0, 2=0, 4=-0.5, 1=-4.0
+      # Net objective per run length (nights):    3=+2.0, 2=0, 4=-3.0  (heavily penalised)
       if (nNS3 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[n3idx(p, d)] <- +0.50
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[n3idx(p, d)] <- +2.0
       if (nNS4 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[n4idx(p, d)] <- -0.60
+        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[n4idx(p, d)] <- -5.0
       if (nWS3 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +0.30
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +2.0
       if (nWS4 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -0.40
-      # Penalise isolated single shifts — solver actively avoids them.
+        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -2.5
+      # Isolated single shifts: most penalised run pattern
       if (nISO > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -1.5
+        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -4.0
       # Tiny penalty on srs variables so they stay at their natural lower bound.
 
       if (nSRS > 0L)
