@@ -56,15 +56,12 @@ FLEX_TARGETS <- list(
 )
 
 # ILP solver wall-clock budget per candidate (seconds).
-SOLVER_TIME_LIMIT <- 120
+SOLVER_TIME_LIMIT <- 60*60*12
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap
 # of 0.09 accepts the integer optimum without wasting time chasing the LP ceiling.
 SOLVER_MIP_GAP   <- 0.09
-# Candidates to collect per tier before picking the best-scored one.
-N_CANDIDATES     <- 5L
-
 # Soft-minimum total shift counts per person across the FULL schedule.
 # The solver penalises falling below these floors in the objective but they
 # are not hard constraints — availability/vacation may prevent reaching them.

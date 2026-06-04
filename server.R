@@ -15,6 +15,9 @@ server <- function(input, output, session) {
       message("Could not fetch sheet names from API — using default list.")
       TIMEOFF_SHEETS
     }))
+    
+    sheet_names <- sheet_names[-which(sheet_names %in% c('Rules', 'rules'))]
+    
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
   })
@@ -35,6 +38,48 @@ server <- function(input, output, session) {
       )
     }
   }, ignoreInit = TRUE)
+
+  # ── Prior schedule grid ────────────────────────────────────────────────────
+  # Renders a 7-day × nPerson grid of select inputs (—/Day/Night).
+  # Re-renders when the sheet changes so the date labels stay correct.
+  output$prior_schedule_ui <- renderUI({
+    cfg <- SHEET_CONFIGS[[input$sheet_select]]
+    if (is.null(cfg)) return(tags$p(class = "text-muted small", "Select a sheet first."))
+
+    prior_dates  <- seq(cfg$schedule_start - 7L, cfg$schedule_start - 1L, by = "day")
+    date_labels  <- format(prior_dates, "%b %d (%a)")
+
+    make_id <- function(person, d)
+      sprintf("prior_%s_%s", gsub("[^A-Za-z0-9]", "_", person), format(d, "%Y%m%d"))
+
+    header_row <- tags$tr(
+      tags$th(style = "min-width:90px;", ""),
+      lapply(date_labels, function(lbl)
+        tags$th(class = "text-center", style = "min-width:80px; font-size:0.75rem;",
+                HTML(gsub(" \\(", "<br/>(", lbl))))
+    )
+    person_rows <- lapply(STAFF, function(person) {
+      cells <- lapply(prior_dates, function(d) {
+        tags$td(class = "p-1",
+          selectInput(make_id(person, d), label = NULL, width = "75px",
+            choices  = c("—" = "", "Day" = "day", "Night" = "night"),
+            selected = "")
+        )
+      })
+      tags$tr(
+        tags$td(class = "align-middle fw-semibold pe-2",
+                style = "font-size:0.82rem; white-space:nowrap;", person),
+        cells
+      )
+    })
+
+    tags$table(
+      class = "table table-sm table-bordered align-middle mb-0",
+      style = "font-size:0.8rem;",
+      tags$thead(class = "table-light", header_row),
+      tags$tbody(person_rows)
+    )
+  })
 
   # ── Schedule result store ──────────────────────────────────────────────────
   # Using reactiveVal + observeEvent (not eventReactive) so the result is only
@@ -71,7 +116,29 @@ server <- function(input, output, session) {
       targets <- compute_targets(time_off)
 
       setProgress(0.35, detail = "Building and solving schedule (ILP)…")
-      sched <- SchedulerLP$new(time_off, targets)
+
+      # Parse prior-schedule grid inputs into named list: person -> data.frame(date,type)
+      {
+        cfg_ps      <- SHEET_CONFIGS[[input$sheet_select]]
+        ps_start    <- if (!is.null(cfg_ps)) cfg_ps$schedule_start else SCHEDULE_START
+        prior_dates <- seq(ps_start - 7L, ps_start - 1L, by = "day")
+        make_id     <- function(person, d)
+          sprintf("prior_%s_%s", gsub("[^A-Za-z0-9]", "_", person), format(d, "%Y%m%d"))
+
+        ps_list <- setNames(lapply(STAFF, function(person) {
+          rows <- Filter(Negate(is.null), lapply(prior_dates, function(d) {
+            val <- input[[make_id(person, d)]]
+            if (!is.null(val) && nzchar(val))
+              data.frame(date = d, type = val, stringsAsFactors = FALSE)
+          }))
+          if (length(rows) > 0L) do.call(rbind, rows) else NULL
+        }), STAFF)
+
+        prior_schedule <- if (any(vapply(ps_list, function(df) !is.null(df), logical(1L))))
+          ps_list else NULL
+      }
+
+      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule)
       sched$run()
 
       setProgress(0.95, detail = "Validating…")
@@ -373,6 +440,7 @@ server <- function(input, output, session) {
     )
 
     # Make cell colour helper
+    show_off <- isTRUE(input$grid_show_off)
     make_col <- function(person_name) {
       colDef(
         name   = person_name,
@@ -380,13 +448,17 @@ server <- function(input, output, session) {
         style  = function(value) {
           if (is.null(value) || is.na(value) || !nzchar(value))
             return(list(background = "#FAFAFA"))
+          if (!show_off && value %in% c("OFF", "VAC", "CME"))
+            return(list(background = "#FAFAFA"))
           bg <- role_colors[value]
           if (is.na(bg)) bg <- "#FAFAFA"
           list(background = bg, fontWeight = "bold",
                fontSize = "11px", textAlign = "center")
         },
         cell   = function(value) {
-          if (is.null(value) || is.na(value)) "" else value
+          if (is.null(value) || is.na(value)) return("")
+          if (!show_off && value %in% c("OFF", "VAC", "CME")) return("")
+          value
         }
       )
     }

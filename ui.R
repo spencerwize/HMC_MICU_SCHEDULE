@@ -75,6 +75,24 @@ ui <- page_navbar(
             tags$li("Fixed holiday assignments pre-seeded")
           ),
           hr(),
+          card(
+            card_header(
+              tags$span(icon("clock-rotate-left"), " Prior Schedule"),
+              class = "bg-light py-2"
+            ),
+            card_body(
+              class = "p-2",
+              tags$p(class = "text-muted small mb-2",
+                "Enter each person's shift type for the 7 days before this schedule starts.",
+                "Prevents the solver from stacking extra shifts on top of work someone",
+                "is already carrying in."
+              ),
+              div(style = "overflow-x:auto;",
+                uiOutput("prior_schedule_ui")
+              )
+            )
+          ),
+          hr(),
           fluidRow(
             column(6,
               card(class = "text-center",
