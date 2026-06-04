@@ -695,17 +695,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           di_pp   <- which(dates_vec %in% pp_d)
           pto_credit <- 0L
-          if (pto_level > 0L && length(di_pp) > 0L) {
-            tgt      <- self$targets[[person]][[pp_name]]
-            dense    <- (tgt$avail - tgt$sched_target) <= 3L
-            if (dense) {
-              pdata    <- self$time_off[[person]]
-              pp_dates <- pp_d[pp_d %in% dates_vec]
-              n_offvac <- if (nrow(pdata) == 0L) 0L else
+          if (length(di_pp) > 0L) {
+            tgt        <- self$targets[[person]][[pp_name]]
+            slack      <- tgt$avail - tgt$sched_target
+            auto_grant <- slack <= 1L                    # always apply, even at pto_level=0
+            soft_grant <- slack <= 3L && pto_level > 0L # apply only when pto_level > 0
+            if (auto_grant || soft_grant) {
+              eff_level <- if (auto_grant) max(pto_level, 1L) else pto_level
+              pdata     <- self$time_off[[person]]
+              pp_dates  <- pp_d[pp_d %in% dates_vec]
+              n_offvac  <- if (nrow(pdata) == 0L) 0L else
                 sum(vapply(pp_dates, function(d)
                   any(pdata$date == d & pdata$type %in% c("off", "vac")),
                   logical(1L)))
-              pto_credit <- if (pto_level == 1L) {
+              pto_credit <- if (eff_level == 1L) {
                 if (n_offvac >= 5L) 1L else 0L
               } else {
                 if (n_offvac >= 7L) 2L else if (n_offvac >= 5L) 1L else 0L
@@ -1247,22 +1250,24 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
     # ── Record which off/vac dates were credited as PTO for each person-PP ──────
     populate_granted_pto = function(pto_level) {
-      if (pto_level == 0L) return(invisible(NULL))
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
       for (person in STAFF) {
         pdata <- self$time_off[[person]]
         for (pp_name in PAY_PERIODS$name) {
           tgt <- self$targets[[person]][[pp_name]]
           if (is.null(tgt)) next
-          dense <- (tgt$avail - tgt$sched_target) <= 3L
-          if (!dense) next
+          slack      <- tgt$avail - tgt$sched_target
+          auto_grant <- slack <= 1L
+          soft_grant <- slack <= 3L && pto_level > 0L
+          if (!auto_grant && !soft_grant) next
+          eff_level <- if (auto_grant) max(pto_level, 1L) else pto_level
           pp_d   <- pp_dates(pp_name)
           pp_in  <- pp_d[pp_d %in% dates_vec]
           n_offvac <- if (is.null(pdata) || nrow(pdata) == 0L) 0L else
             sum(vapply(pp_in,
                        function(d) any(pdata$date == d & pdata$type %in% c("off", "vac")),
                        logical(1L)))
-          pto_credit <- if (pto_level == 1L) {
+          pto_credit <- if (eff_level == 1L) {
             if (n_offvac >= 5L) 1L else 0L
           } else {
             if (n_offvac >= 7L) 2L else if (n_offvac >= 5L) 1L else 0L
