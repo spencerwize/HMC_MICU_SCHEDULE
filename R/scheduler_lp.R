@@ -724,8 +724,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
           add_con(cols, rep(1, length(cols)), "<=", cap)
           # Non-flex staff: enforce equality so PTO days count toward the 6-shift total.
-          # Capped by avail so it can't require more shifts than the person can work.
-          if (!is_flex) {
+          # Gated by add_c_min — nuclear tiers drop the floor so density constraints
+          # can prevent over-scheduling without creating infeasibility.
+          if (!is_flex && add_c_min) {
             floor <- min(cap, self$targets[[person]][[pp_name]]$avail)
             if (floor > 0L)
               add_con(cols, rep(1, length(cols)), ">=", floor)
