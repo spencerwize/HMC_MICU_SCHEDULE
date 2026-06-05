@@ -50,7 +50,7 @@
 #   C7    Night→Day 1d ban:   x[p,d,Night] + x[p,d+1,s] ≤ 1  s∈DAY_SLOTS
 #   C7b   Night→Day 2d ban:   x[p,d,Night] + x[p,d+2,s] ≤ 1  s∈DAY_SLOTS  (2 rest days after last night)
 #   C8    Day→Night 1d gap:   x[p,d,s] + x[p,d+1,Night] ≤ 1  s∈DAY_SLOTS
-#   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4
+#   C9    Max 4 consec Nts:   Σ_{k=0}^4 x[p,d+k,Night]    ≤ 4  (at most once per person)
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
 #   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
 #   C10c  Density caps: ≤5 in 7/8-day windows; ≤6 in 9-day; ≤7 in 10-day
@@ -488,8 +488,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       ssoff  <- wsshoff + nWSSHORT
       ssidx  <- function(p, d) ssoff + (p - 1L) * nD + d
 
+      # n4cap[p,d] ∈ [0,1] continuous — forced ≥ 1 when nights d..d+3 are all scheduled.
+      # Used to enforce at-most-one 4-consecutive-night run per person per schedule.
+      nN4CAP   <- if (nD >= 4L) nP * (nD - 3L) else 0L
+      n4capoff <- ssoff + nSS
+      n4capidx <- function(p, d) n4capoff + (p - 1L) * (nD - 3L) + d
+
       nV <- nX + nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nISO + nSRS +
-            nNSSHORT + nWSSHORT + nSS
+            nNSSHORT + nWSSHORT + nSS + nN4CAP
 
       # Variable bounds and types
       lb    <- numeric(nV)
@@ -498,12 +504,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                  rep(1, nISO), rep(1, nSRS),
                  rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
                  rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT),
-                 rep(1, nSS))
+                 rep(1, nSS), rep(1, nN4CAP))
       types <- c(rep("I", nX),
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
                  rep("I", nISO),
                  rep("I", nSRS),
-                 rep("C", nNSSHORT + nWSSHORT + nSS))
+                 rep("C", nNSSHORT + nWSSHORT + nSS + nN4CAP))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
@@ -791,30 +797,46 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C9: Max 3 consecutive nights — Σ_{k=0}^3 x[p,d+k,Night] ≤ 3 ────────
+      # ── C9: Max 4 consecutive nights — Σ_{k=0}^4 x[p,d+k,Night] ≤ 4 ────────
+      # (At most once per person enforced by C9cap below.)
       if (add_c9) {
         for (pi in seq_len(nP)) {
-          for (di in seq_len(nD - 3L)) {
-            cols <- vapply(0:3, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
-            add_con(cols, rep(1, 4L), "<=", 3)
+          for (di in seq_len(nD - 4L)) {
+            cols <- vapply(0:4, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
+            add_con(cols, rep(1, 5L), "<=", 4)
           }
         }
       }
 
-      # ── C9x: Cross-boundary max-3-consecutive nights ─────────────────────────
-      # For windows that span prior-schedule nights into sched days 1..3.
-      # k prior days in window → sched nights in remaining (4-k) days ≤ 3 - pre_count.
+      # ── C9x: Cross-boundary max-4-consecutive nights ─────────────────────────
+      # For windows that span prior-schedule nights into sched days 1..4.
+      # k prior days in window → sched nights in remaining (5-k) days ≤ 4 - pre_count.
       if (add_c9 && ps_has_prior) {
         for (pi in seq_len(nP)) {
-          for (k in 1L:min(3L, nD)) {
+          for (k in 1L:min(4L, nD)) {
             pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
             pre_count <- as.integer(sum(pre_dates %in% .ps_nights[[pi]]))
             if (pre_count == 0L) next
-            j_max <- 4L - k
+            j_max <- 5L - k
             if (j_max < 1L) next
             cols <- vapply(seq_len(j_max), function(j) xidx(pi, j, S_NIGHT), integer(1L))
-            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 3L - pre_count))
+            add_con(cols, rep(1L, length(cols)), "<=", max(0L, 4L - pre_count))
           }
+        }
+      }
+
+      # ── C9cap: At most one 4-consecutive-night run per person per schedule ───
+      # n4cap[p,d] >= x[p,d,N]+x[p,d+1,N]+x[p,d+2,N]+x[p,d+3,N] - 3
+      # Σ_d n4cap[p,d] <= 1  per person
+      if (add_c9 && nN4CAP > 0L) {
+        for (pi in seq_len(nP)) {
+          for (di in seq_len(nD - 3L)) {
+            xcols <- vapply(0:3, function(k) xidx(pi, di + k, S_NIGHT), integer(1L))
+            ncol  <- n4capidx(pi, di)
+            add_con(c(ncol, xcols), c(1, rep(-1, 4)), ">=", -3)
+          }
+          ncols <- vapply(seq_len(nD - 3L), function(di) n4capidx(pi, di), integer(1L))
+          add_con(ncols, rep(1, length(ncols)), "<=", 1)
         }
       }
 
