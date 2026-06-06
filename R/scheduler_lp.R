@@ -54,7 +54,6 @@
 #   C10   Max 4 consec work:  Σ_{k=0}^4 work[p,d+k]       ≤ 4
 #   C10b  Max 2 consec wknd: work[p,wday_k]+work[p,wday_{k+1}]+work[p,wday_{k+2}] ≤ 2  (Sat & Sun)
 #   C10c  Density caps: ≤5 in 7/8-day windows; ≤6 in 9-day; ≤7 in 10-day
-#         (PTO-credited staff get +pto_credit headroom per window)
 #   C11   Night total cap:    Σ_d x[p,d,Night] ≤ MAX_NIGHTS_TOTAL
 #   C11b  No night stretch in consecutive PPs: Σ_{d∈PP_k∪PP_{k+1}} s[p,d] ≤ 1  (s = stretch-start)
 #   C11c  Weekend hard bounds: MIN_WKND_HARD ≤ Σ_{d∈Sat/Sun} work[p,d] ≤ MAX_WKND_HARD
@@ -154,15 +153,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           add_c15                 = t$c15,
           add_c16                 = t$c16,
           add_c_min               = t$c_min,
-          pto_level               = 2L,
           max_iso_per_person      = t$max_iso,
           max_short_per_person    = t$max_short,
           max_unstaffed_per_month = t$unstaffed_mo_cap
         )
         if (is.null(result)) next
 
-        self$tier_used <- list(index = ti, label = t$label, pto_level = 2L)
-        private$populate_granted_pto(result$pto_credit_mat)
+        self$tier_used <- list(index = ti, label = t$label)
+        private$populate_granted_pto(result)
         message("  Populating solution and filling APP3 slots…")
         private$populate_from_solution(result)
         private$fill_roaming_pass()
@@ -183,24 +181,23 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       count <- 0L
       repeat {
         res <- private$build_and_solve(
-          night_required     = t$night_req,
-          roam_in_obj        = t$roam_obj,
-          pp_cap_reduction   = t$pp_red,
-          add_c8             = t$c8,
-          add_c8b            = t$c8b,
-          add_c9             = t$c9,
-          add_c10            = t$c10,
-          add_c10c           = t$c10c,
-          add_c11b           = t$c11b,
-          add_c11c           = t$c11c,
-          night_min_hard     = t$night_min_hard,
-          night_max_hard     = t$night_max_hard,
-          add_c13            = t$c13,
-          add_c14            = t$c14,
-          add_c15            = t$c15,
-          add_c16            = t$c16,
-          add_c_min            = t$c_min,
-          pto_level            = self$tier_used$pto_level,
+          night_required          = t$night_req,
+          roam_in_obj             = t$roam_obj,
+          pp_cap_reduction        = t$pp_red,
+          add_c8                  = t$c8,
+          add_c8b                 = t$c8b,
+          add_c9                  = t$c9,
+          add_c10                 = t$c10,
+          add_c10c                = t$c10c,
+          add_c11b                = t$c11b,
+          add_c11c                = t$c11c,
+          night_min_hard          = t$night_min_hard,
+          night_max_hard          = t$night_max_hard,
+          add_c13                 = t$c13,
+          add_c14                 = t$c14,
+          add_c15                 = t$c15,
+          add_c16                 = t$c16,
+          add_c_min               = t$c_min,
           max_iso_per_person      = t$max_iso,
           max_short_per_person    = t$max_short,
           max_unstaffed_per_month = t$unstaffed_mo_cap,
@@ -386,7 +383,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       add_c15          = TRUE,          # no isolated single shifts
       add_c16          = TRUE,          # no isolated 2-day blocks of day shifts (min run 3)
       add_c_min        = TRUE,          # enforce soft_min floor for FLEX_TARGETS staff (e.g. Todd >= 4)
-      pto_level        = 0L,            # 0=none; 1=1d for ≥5 off/vac; 2=2d for ≥7, 1d for 5-6 (density-gated)
       max_iso_per_person       = NULL,       # NULL = unlimited; integer = max isolated single shifts per person
       max_short_per_person     = NULL,       # NULL = unlimited; integer = max short runs (len 1 or 2) per person
       max_unstaffed_per_month  = NULL,       # NULL = unlimited; integer = max unstaffed night slots per calendar month
@@ -691,41 +687,15 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] = sched_target - pto_credit (non-flex)
-      #                                             ≤ sched_target - pto_credit (flex/Todd)
-      pto_credit_mat <- matrix(0L, nP, nrow(PAY_PERIODS))  # [pi, ppi] used in C10c
+      # ── C6: PP shift cap — Σ_{d∈PP,s} x[p,d,s] ≤ sched_target - pp_cap_reduction ──
       for (pi in seq_len(nP)) {
-        person        <- STAFF[pi]
-        is_flex       <- person %in% names(FLEX_TARGETS)
+        person  <- STAFF[pi]
         for (ppi in seq_len(nrow(PAY_PERIODS))) {
           pp_name <- PAY_PERIODS$name[ppi]
           pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
           di_pp   <- which(dates_vec %in% pp_d)
-          pto_credit <- 0L
-          if (length(di_pp) > 0L) {
-            tgt        <- self$targets[[person]][[pp_name]]
-            slack      <- tgt$avail - tgt$sched_target
-            auto_grant <- slack <= 1L                    # always apply, even at pto_level=0
-            soft_grant <- slack <= 3L && pto_level > 0L # apply only when pto_level > 0
-            if (auto_grant || soft_grant) {
-              eff_level <- if (auto_grant) max(pto_level, 1L) else pto_level
-              pdata     <- self$time_off[[person]]
-              pp_dates  <- pp_d[pp_d %in% dates_vec]
-              n_offvac  <- if (nrow(pdata) == 0L) 0L else
-                sum(vapply(pp_dates, function(d)
-                  any(pdata$date == d & pdata$type %in% c("off", "vac")),
-                  logical(1L)))
-              pto_credit <- if (eff_level == 1L) {
-                if (n_offvac >= 5L) 1L else 0L
-              } else {
-                if (n_offvac >= 7L) 2L else if (n_offvac >= 5L) 1L else 0L
-              }
-            }
-          }
-          pto_credit_mat[pi, ppi] <- pto_credit
-          cap <- max(0L, self$targets[[person]][[pp_name]]$sched_target -
-                          pp_cap_reduction - pto_credit)
-          if (length(di_pp) == 0 || cap <= 0) next
+          cap <- max(0L, self$targets[[person]][[pp_name]]$sched_target - pp_cap_reduction)
+          if (length(di_pp) == 0L || cap <= 0L) next
           cols <- as.integer(unlist(lapply(di_pp, function(di)
             vapply(seq_len(nS), function(s) xidx(pi, di, s), integer(1L)))))
           add_con(cols, rep(1, length(cols)), "<=", cap)
@@ -733,9 +703,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
 
       # ── C_min: Soft minimum shifts per PP for all staff ─────────────────────────
-      # Uses soft_min (5 for non-flex, FLEX value for Todd) capped at the C6 ceiling
-      # so the floor never exceeds the cap. This also makes PTO reduce the floor
-      # automatically: cap=5 (PTO=1) → floor=min(5,5)=5 → exactly 5 worked.
+      # Uses soft_min (5 for non-flex, FLEX value for Todd) capped at the C6 ceiling.
       if (add_c_min) {
         for (pi in seq_len(nP)) {
           person <- STAFF[pi]
@@ -744,8 +712,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             pp_d    <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
             di_pp   <- which(dates_vec %in% pp_d)
             t_info  <- self$targets[[person]][[pp_name]]
-            cap_eff <- max(0L, t_info$sched_target - pp_cap_reduction -
-                               pto_credit_mat[pi, ppi])
+            cap_eff <- max(0L, t_info$sched_target - pp_cap_reduction)
             sm <- min(t_info$soft_min, cap_eff, t_info$avail)
             if (sm <= 0L || length(di_pp) == 0L) next
             cols <- as.integer(unlist(lapply(di_pp, function(di)
@@ -884,7 +851,6 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       # ── C10c: Multi-window density caps ──────────────────────────────────────
       # ≤5 in any 7-day window, ≤5 in any 8-day window,
       # ≤6 in any 9-day window, ≤7 in any 10-day window.
-      # PTO-credited staff get base_cap + pto_credit_vec[pi] headroom per window.
       if (add_c10c) {
         density_windows <- list(
           list(W = 7L,  B = 5L),
@@ -897,7 +863,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           W <- dw$W; B <- dw$B
           if (nD < W) next
           for (pi in seq_len(nP)) {
-            cap_p <- B + max(pto_credit_mat[pi, ])
+            cap_p <- B
             for (di in seq_len(nD - W + 1L)) {
               cols <- vapply(0:(W - 1L), function(k) widx(pi, di + k), integer(1L))
               add_con(cols, rep(1L, W), "<=", cap_p)
@@ -905,7 +871,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           }
           if (ps_has_prior && nD >= 1L) {
             for (pi in seq_len(nP)) {
-              cap_p <- B + max(pto_credit_mat[pi, ])
+              cap_p <- B
               for (k in 1L:min(W - 1L, nD)) {
                 pre_dates <- seq(sched_day0 - k + 1L, sched_day0, by = 1L)
                 pre_count <- as.integer(sum(pre_dates %in% .ps_all[[pi]]))
@@ -1283,27 +1249,45 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                         if (!is.null(ub) && is.finite(ub)) sprintf("  (max: %.1f)", ub) else ""
                       }))
 
-      list(sol = sol, nP = nP, nD = nD, nX = nX, xidx = xidx, dates_vec = dates_vec,
-           pto_credit_mat = pto_credit_mat)
+      list(sol = sol, nP = nP, nD = nD, nS = nS, nX = nX, xidx = xidx, dates_vec = dates_vec)
     },
 
     # ── Record which off/vac dates were credited as PTO for each person-PP ──────
-    populate_granted_pto = function(pto_credit_mat) {
-      dates_vec <- as.Date(self$dates, origin = "1970-01-01")
+    # PTO is granted post-solve: if actual worked shifts < sched_target in a PP,
+    # mark the first (deficit) off/vac days in that PP as PTO.
+    populate_granted_pto = function(result) {
+      sol       <- result$sol
+      xidx      <- result$xidx
+      nP_r      <- result$nP
+      nD_r      <- result$nD
+      nS_r      <- result$nS
+      dates_vec <- result$dates_vec
+
       for (pi in seq_len(length(STAFF))) {
         person <- STAFF[pi]
         pdata  <- self$time_off[[person]]
         for (ppi in seq_len(nrow(PAY_PERIODS))) {
-          pto_credit <- pto_credit_mat[pi, ppi]
-          if (pto_credit == 0L) next
           pp_name <- PAY_PERIODS$name[ppi]
           pp_d    <- pp_dates(pp_name)
           pp_in   <- pp_d[pp_d %in% dates_vec]
+          di_pp   <- which(dates_vec %in% pp_in)
+          if (length(di_pp) == 0L) next
+
+          # Count shifts actually assigned by LP in this PP
+          actual_worked <- as.integer(sum(vapply(di_pp, function(di)
+            any(vapply(seq_len(nS_r), function(s)
+              sol$primal[xidx(pi, di, s)] > 0.5, logical(1L))),
+            logical(1L))))
+
+          sched_tgt <- self$targets[[person]][[pp_name]]$sched_target
+          deficit   <- max(0L, sched_tgt - actual_worked)
+          if (deficit == 0L || is.null(pdata) || nrow(pdata) == 0L) next
+
           offvac_dates <- sort(pp_in[vapply(pp_in,
-            function(d) !is.null(pdata) && nrow(pdata) > 0L &&
-              any(pdata$date == d & pdata$type %in% c("off", "vac")),
+            function(d) any(pdata$date == d & pdata$type %in% c("off", "vac")),
             logical(1L))])
-          credited <- head(offvac_dates, pto_credit)
+          credited <- head(offvac_dates, deficit)
+          if (length(credited) == 0L) next
           self$granted_pto[[person]] <- sort(unique(c(
             self$granted_pto[[person]], credited)))
         }
