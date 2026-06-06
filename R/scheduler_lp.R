@@ -525,20 +525,20 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       obj[I_MAX_WKND]   <- -3.0;  obj[I_MIN_WKND]   <- +3.0
       obj[I_MAX_ROAM]   <- -0.5;  obj[I_MIN_ROAM]   <- +0.5
 
-      # Run-length preferences: 3-consecutive > 2-consecutive > 4-consecutive > isolated
-      # Net objective per run length (work days): 3=+2.0, 2=0, 4=-0.5, 1=-4.0
-      # Net objective per run length (nights):    3=+2.0, 2=0, 4=-3.0  (heavily penalised)
+      # Run-length preferences: 3-consecutive > 4-consecutive > 2-consecutive > isolated
+      # Work days: 3=+2.5, 4=+1.0, 2=0, 1=-5.0
+      # Nights:    3=+2.5, 2=0, 4=-5.0 (4-night run heavily penalised; allowed at most once)
       if (nNS3 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[n3idx(p, d)] <- +2.0
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[n3idx(p, d)] <- +2.5
       if (nNS4 > 0L)
         for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[n4idx(p, d)] <- -5.0
       if (nWS3 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +2.0
+        for (p in seq_len(nP)) for (d in seq_len(nD - 2L)) obj[w3idx(p, d)] <- +2.5
       if (nWS4 > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- -2.5
+        for (p in seq_len(nP)) for (d in seq_len(nD - 3L)) obj[w4idx(p, d)] <- +1.0
       # Isolated single shifts: most penalised run pattern
       if (nISO > 0L)
-        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -4.0
+        for (p in seq_len(nP)) for (d in seq_len(nD)) obj[isoidx(p, d)] <- -5.0
       # Tiny penalty on srs variables so they stay at their natural lower bound.
 
       if (nSRS > 0L)
