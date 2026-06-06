@@ -55,13 +55,37 @@ FLEX_TARGETS <- list(
   Todd = 4L
 )
 
-# ILP solver wall-clock budget per candidate (seconds).
-SOLVER_TIME_LIMIT <- 60*60*12
+# ILP solver wall-clock budget per TIER (seconds).
+# This is a safety *ceiling*, not a target — on real data the MIP gap below stops
+# the solver well before it.  But the full model (tier 1) is combinatorially hard
+# to find a FIRST integer-feasible point for, so the ceiling must stay generous
+# enough that tier 1 isn't abandoned for a weaker tier.  30 min is a 24× cut from
+# the old 12h value — it bounds a runaway tier without sacrificing tier 1.
+#   • The real speed levers are SOLVER_THREADS (HiGHS defaults to 1 thread!), the
+#     tightened constraints, and mip_heuristic_effort (set in scheduler_lp.R).
+#   • If hard instances still abandon tier 1 here, raise this; if real runs always
+#     stop on the gap in a few minutes, you can safely lower it.
+SOLVER_TIME_LIMIT <- 60*60*2
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap
 # of 0.09 accepts the integer optimum without wasting time chasing the LP ceiling.
 SOLVER_MIP_GAP   <- 0.09
+
+# Number of threads HiGHS may use for parallel branch-and-bound.
+# 0 = autodetect (parallel::detectCores()); a positive integer pins the count.
+SOLVER_THREADS <- 0L
+
+# ── Fairness-polish phase (see SchedulerLP$run) ──────────────────────────────
+# After the cascade finds a feasible tier, a second "polish" solve re-optimises
+# only the fairness/streak/isolation terms with total coverage floored at the
+# value already achieved.  Because coverage is dominated by hard equalities, the
+# 9% coverage gap above can leave the small fairness coefficients loose; this
+# phase tightens them.  It is always feasible (the phase-1 solution satisfies the
+# floor) so it can only improve, never worsen, the schedule.
+FAIRNESS_POLISH           <- TRUE
+SOLVER_POLISH_TIME_LIMIT  <- 60      # seconds — short; coverage is already fixed
+SOLVER_POLISH_MIP_GAP     <- 0.01    # tight — fairness-only objective has a small range
 # Soft-minimum total shift counts per person across the FULL schedule.
 # The solver penalises falling below these floors in the objective but they
 # are not hard constraints — availability/vacation may prevent reaching them.

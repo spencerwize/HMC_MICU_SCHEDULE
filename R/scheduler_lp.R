@@ -159,6 +159,48 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         )
         if (is.null(result)) next
 
+        # ── Fairness polish (#10): re-optimise spread with coverage pinned ──────
+        # The cascade's coverage gap can leave the small fairness coefficients
+        # loose.  Re-solve the same tier with coverage floored at the achieved
+        # value and a fairness-only objective.  Always feasible (the phase-1
+        # solution satisfies the floor), so it can only improve the schedule.
+        # Reuses the just-built base model via the cache, so only the obj and one
+        # floor constraint differ.
+        if (isTRUE(FAIRNESS_POLISH)) {
+          cov_floor <- private$coverage_value(result, t$roam_obj)
+          message(sprintf("  Polishing fairness (coverage floored at %.1f)…", cov_floor))
+          polished <- tryCatch(
+            private$build_and_solve(
+              night_required          = t$night_req,
+              roam_in_obj             = t$roam_obj,
+              pp_cap_reduction        = t$pp_red,
+              add_c8                  = t$c8,
+              add_c8b                 = t$c8b,
+              add_c9                  = t$c9,
+              add_c10                 = t$c10,
+              add_c10c                = t$c10c,
+              add_c11b                = t$c11b,
+              add_c11c                = t$c11c,
+              night_min_hard          = t$night_min_hard,
+              night_max_hard          = t$night_max_hard,
+              add_c13                 = t$c13,
+              add_c14                 = t$c14,
+              add_c15                 = t$c15,
+              add_c16                 = t$c16,
+              add_c_min               = t$c_min,
+              max_iso_per_person      = t$max_iso,
+              max_short_per_person    = t$max_short,
+              max_unstaffed_per_month = t$unstaffed_mo_cap,
+              fairness_only           = TRUE,
+              coverage_floor          = cov_floor,
+              time_limit              = SOLVER_POLISH_TIME_LIMIT,
+              mip_gap                 = SOLVER_POLISH_MIP_GAP),
+            error = function(e) {
+              message(sprintf("  Polish skipped: %s", conditionMessage(e))); NULL
+            })
+          if (!is.null(polished)) result <- polished
+        }
+
         self$tier_used <- list(index = ti, label = t$label)
         private$populate_granted_pto(result)
         message("  Populating solution and filling APP3 slots…")
@@ -276,6 +318,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
   # ── Private implementation ─────────────────────────────────────────────────
   private = list(
 
+    # Cached base model (bounds + constraints) keyed by tier parameters; reused
+    # across count_solutions() iterations and the fairness-polish solve (#6).
+    .base_cache = NULL,
+
     # ── Availability helper ───────────────────────────────────────────────────
     is_blocked = function(person, d) {
       pdata <- self$time_off[[person]]
@@ -386,7 +432,11 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       max_iso_per_person       = NULL,       # NULL = unlimited; integer = max isolated single shifts per person
       max_short_per_person     = NULL,       # NULL = unlimited; integer = max short runs (len 1 or 2) per person
       max_unstaffed_per_month  = NULL,       # NULL = unlimited; integer = max unstaffed night slots per calendar month
-      extra_nogo               = list()      # previously found x-vectors to exclude (solution enumeration)
+      extra_nogo               = list(),     # previously found x-vectors to exclude (solution enumeration)
+      fairness_only            = FALSE,      # zero the coverage objective; optimise only fairness/streak/iso terms
+      coverage_floor           = NULL,       # NULL = none; lower-bound total coverage objective (fairness polish)
+      time_limit               = SOLVER_TIME_LIMIT,
+      mip_gap                  = SOLVER_MIP_GAP
     ) {
 
       dates_vec <- as.Date(self$dates, origin = "1970-01-01")
@@ -501,21 +551,29 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                  rep(as.double(MIN_NIGHTS_SOFT_TOTAL), nNSSHORT),
                  rep(as.double(MIN_WKND_SOFT_TOTAL),   nWSSHORT),
                  rep(1, nSS), rep(1, nN4CAP))
+      # iso/srs are pinned to {0,1} by their defining constraints whenever work[p,d]
+      # is integral (guaranteed via C4 + C_work), so they can be declared continuous.
+      # Keeping them out of the integer set shrinks the branch-and-bound tree.
       types <- c(rep("I", nX),
                  rep("C", nF + nW + nNS3 + nNS4 + nWS3 + nWS4),
-                 rep("I", nISO),
-                 rep("I", nSRS),
+                 rep("C", nISO),
+                 rep("C", nSRS),
                  rep("C", nNSSHORT + nWSSHORT + nSS + nN4CAP))
 
       # Objective (maximise)
       roam_w <- if (roam_in_obj) 2 else 0
       obj    <- numeric(nV)
-      for (p in seq_len(nP)) {
-        for (d in seq_len(nD)) {
-          obj[xidx(p, d, S_APP1)]  <- 4
-          obj[xidx(p, d, S_APP2)]  <- 0.1
-          obj[xidx(p, d, S_ROAM)]  <- if (roam_in_obj) 0.1 else 0
-          obj[xidx(p, d, S_NIGHT)] <- 0.1
+      # Coverage weights — zeroed in the fairness-polish phase (coverage is pinned
+      # by the coverage_floor constraint instead, freeing the solver to optimise
+      # only the fairness/streak/isolation terms below).
+      if (!fairness_only) {
+        for (p in seq_len(nP)) {
+          for (d in seq_len(nD)) {
+            obj[xidx(p, d, S_APP1)]  <- 4
+            obj[xidx(p, d, S_APP2)]  <- 0.1
+            obj[xidx(p, d, S_ROAM)]  <- if (roam_in_obj) 0.1 else 0
+            obj[xidx(p, d, S_NIGHT)] <- 0.1
+          }
         }
       }
       # Fairness is the primary objective — large coefficients drive the solver
@@ -553,24 +611,62 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         obj[wsshidx(p)] <- -WKND_SHORT_PEN
       }
 
-      # Constraint accumulator (triplet form → sparseMatrix)
+      # ── Constraint accumulator (triplet form → sparseMatrix) ─────────────────
+      # Each constraint's column indices and coefficients are stored as one
+      # element of a preallocated, doubling list; rows are stitched into flat
+      # i/j/x vectors once at assembly.  This avoids the O(n²) cost of growing
+      # flat ri/ci/vi vectors with c() on every add_con call.
+      .cap    <- 4096L
+      col_l   <- vector("list", .cap)   # column indices, one vector per constraint
+      val_l   <- vector("list", .cap)   # coefficients,   one vector per constraint
+      lhs_v   <- double(.cap)
+      rhs_v   <- double(.cap)
       n_con   <- 0L
-      ri      <- integer(0); ci <- integer(0); vi <- double(0)
-      con_lhs <- double(0);  con_rhs <- double(0)
 
       add_con <- function(indices, coeffs, type, rhs_val) {
         n_con <<- n_con + 1L
-        ri      <<- c(ri, rep(n_con, length(indices)))
-        ci      <<- c(ci, as.integer(indices))
-        vi      <<- c(vi, as.double(coeffs))
+        if (n_con > length(col_l)) {
+          grow  <- length(col_l)
+          col_l <<- c(col_l, vector("list", grow))
+          val_l <<- c(val_l, vector("list", grow))
+          length(lhs_v) <<- length(lhs_v) + grow
+          length(rhs_v) <<- length(rhs_v) + grow
+        }
+        col_l[[n_con]] <<- as.integer(indices)
+        val_l[[n_con]] <<- as.double(coeffs)
         if (type == "<=") {
-          con_lhs <<- c(con_lhs, -Inf);    con_rhs <<- c(con_rhs, rhs_val)
+          lhs_v[n_con] <<- -Inf;    rhs_v[n_con] <<- rhs_val
         } else if (type == ">=") {
-          con_lhs <<- c(con_lhs, rhs_val); con_rhs <<- c(con_rhs, Inf)
+          lhs_v[n_con] <<- rhs_val; rhs_v[n_con] <<- Inf
         } else {
-          con_lhs <<- c(con_lhs, rhs_val); con_rhs <<- c(con_rhs, rhs_val)
+          lhs_v[n_con] <<- rhs_val; rhs_v[n_con] <<- rhs_val
         }
       }
+
+      # ── Base-model cache key (#6) ────────────────────────────────────────────
+      # The base model (all bounds + constraints, EXCLUDING the coverage floor and
+      # no-good cuts) depends only on the tier parameters below — never on
+      # extra_nogo / coverage_floor / fairness_only.  count_solutions() and the
+      # fairness-polish phase re-solve with identical tier parameters, so the base
+      # is built once and reused.  obj is recomputed each call (cheap, and it alone
+      # depends on fairness_only).
+      nb <- function(x) if (is.null(x)) "N" else as.character(x)
+      base_key <- paste(
+        night_required, roam_in_obj, pp_cap_reduction,
+        add_c8, add_c8b, add_c9, add_c10, add_c10c, add_c11b, add_c11c,
+        nb(night_min_hard), nb(night_max_hard),
+        add_c13, add_c14, add_c15, add_c16, add_c_min,
+        nb(max_iso_per_person), nb(max_short_per_person),
+        nb(max_unstaffed_per_month), nV,
+        sep = "|")
+
+      .cache <- private$.base_cache
+      if (!is.null(.cache) && identical(.cache$key, base_key)) {
+        # Cache hit — restore base bounds + constraints, skip the rebuild below.
+        lb    <- .cache$lb;    ub    <- .cache$ub;    types <- .cache$types
+        col_l <- .cache$col_l; val_l <- .cache$val_l
+        lhs_v <- .cache$lhs_v; rhs_v <- .cache$rhs_v; n_con <- .cache$n_con
+      } else {
 
       # ── C1: Slot uniqueness — Σ_p x[p,d,s] ≤ 1 ──────────────────────────────
       for (d in seq_len(nD)) {
@@ -722,44 +818,43 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
-      # ── C7: Night→Day ban 1d — x[p,d,Night] + x[p,d+1,s] ≤ 1 ──────────────
+      # ── C7: Night→Day ban 1d — x[p,d,N] + Σ_{s∈DAY} x[p,d+1,s] ≤ 1 ───────
+      # Clique form: day slots are mutually exclusive (C4), so summing them into
+      # one row replaces the three pairwise rows AND tightens the LP relaxation.
+      # Σ_{s∈DAY} x[p,d+1,s] = work[p,d+1] − x[p,d+1,N].
       for (pi in seq_len(nP)) {
         for (di in seq_len(nD - 1L)) {
-          ni <- xidx(pi, di, S_NIGHT)
-          for (s in DAY_S)
-            add_con(c(ni, xidx(pi, di + 1L, s)), c(1, 1), "<=", 1)
+          add_con(c(xidx(pi, di, S_NIGHT), widx(pi, di + 1L), xidx(pi, di + 1L, S_NIGHT)),
+                  c(1, 1, -1), "<=", 1)
         }
       }
 
-      # ── C7b: Night→Day ban 2d — x[p,d,Night] + x[p,d+2,s] ≤ 1 ─────────────
-      # Enforces two full rest days between the end of any night shift and the
-      # next day-shift assignment (eliminates Night-rest-APP patterns).
+      # ── C7b: Night→Day ban 2d — x[p,d,N] + Σ_{s∈DAY} x[p,d+2,s] ≤ 1 ──────
+      # Two full rest days between a night and the next day shift (clique form).
       for (pi in seq_len(nP)) {
         for (di in seq_len(nD - 2L)) {
-          ni <- xidx(pi, di, S_NIGHT)
-          for (s in DAY_S)
-            add_con(c(ni, xidx(pi, di + 2L, s)), c(1, 1), "<=", 1)
+          add_con(c(xidx(pi, di, S_NIGHT), widx(pi, di + 2L), xidx(pi, di + 2L, S_NIGHT)),
+                  c(1, 1, -1), "<=", 1)
         }
       }
 
-      # ── C8: Day→Night gap 1d — x[p,d,s] + x[p,d+1,Night] ≤ 1 ──────────────
+      # ── C8: Day→Night gap 1d — Σ_{s∈DAY} x[p,d,s] + x[p,d+1,N] ≤ 1 ───────
+      # Σ_{s∈DAY} x[p,d,s] = work[p,d] − x[p,d,N]  (clique form).
       if (add_c8) {
         for (pi in seq_len(nP)) {
           for (di in seq_len(nD - 1L)) {
-            ni <- xidx(pi, di + 1L, S_NIGHT)
-            for (s in DAY_S)
-              add_con(c(xidx(pi, di, s), ni), c(1, 1), "<=", 1)
+            add_con(c(widx(pi, di), xidx(pi, di, S_NIGHT), xidx(pi, di + 1L, S_NIGHT)),
+                    c(1, -1, 1), "<=", 1)
           }
         }
       }
 
-      # ── C8b: Day→Night 2d gap — x[p,d,s] + x[p,d+2,Night] ≤ 1 ─────────────
+      # ── C8b: Day→Night 2d gap — Σ_{s∈DAY} x[p,d,s] + x[p,d+2,N] ≤ 1 ──────
       if (add_c8b) {
         for (pi in seq_len(nP)) {
           for (di in seq_len(nD - 2L)) {
-            ni <- xidx(pi, di + 2L, S_NIGHT)
-            for (s in DAY_S)
-              add_con(c(xidx(pi, di, s), ni), c(1, 1), "<=", 1)
+            add_con(c(widx(pi, di), xidx(pi, di, S_NIGHT), xidx(pi, di + 2L, S_NIGHT)),
+                    c(1, -1, 1), "<=", 1)
           }
         }
       }
@@ -1201,6 +1296,30 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
       }
 
+      # ── Store base model for reuse (#6) ──────────────────────────────────────
+      # Trim the preallocated slack before caching so reloads start exactly sized.
+      private$.base_cache <- list(
+        key   = base_key,
+        lb    = lb, ub = ub, types = types,
+        col_l = col_l[seq_len(n_con)], val_l = val_l[seq_len(n_con)],
+        lhs_v = lhs_v[seq_len(n_con)], rhs_v = rhs_v[seq_len(n_con)],
+        n_con = n_con)
+      }   # ── end cache-miss base build ──────────────────────────────────────────
+
+      # ── Coverage floor (#10 fairness polish) ─────────────────────────────────
+      # Pin total coverage at the value already achieved so the fairness-only
+      # objective cannot trade coverage away.  Added outside the cached base so the
+      # base remains reusable across the normal and polish solves.
+      if (!is.null(coverage_floor)) {
+        rw      <- if (roam_in_obj) 0.1 else 0
+        cf_cols <- as.integer(unlist(lapply(seq_len(nP), function(pi)
+          unlist(lapply(seq_len(nD), function(di)
+            c(xidx(pi, di, S_APP1), xidx(pi, di, S_APP2),
+              xidx(pi, di, S_ROAM), xidx(pi, di, S_NIGHT)))))))
+        cf_coef <- rep(c(4, 0.1, rw, 0.1), nP * nD)
+        add_con(cf_cols, cf_coef, ">=", coverage_floor)
+      }
+
       # ── Extra no-good cuts (solution enumeration) ─────────────────────────────
       for (x_prev in extra_nogo) {
         on_idx <- which(x_prev > 0.5)
@@ -1213,7 +1332,35 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
                       nX, nCont, n_con))
 
+      # Stitch the per-constraint triplet lists into flat i/j/x vectors once.
+      idx     <- seq_len(n_con)
+      ri      <- rep.int(idx, lengths(col_l[idx]))
+      ci      <- unlist(col_l[idx], use.names = FALSE)
+      vi      <- unlist(val_l[idx], use.names = FALSE)
+      con_lhs <- lhs_v[idx]
+      con_rhs <- rhs_v[idx]
       A <- Matrix::sparseMatrix(i = ri, j = ci, x = vi, dims = c(n_con, nV))
+
+      # Parallel branch-and-bound (#3).  SOLVER_THREADS == 0 → autodetect cores.
+      n_threads <- SOLVER_THREADS
+      if (is.null(n_threads) || n_threads <= 0L) {
+        n_threads <- tryCatch(parallel::detectCores(), error = function(e) 1L)
+        if (is.na(n_threads) || n_threads < 1L) n_threads <- 1L
+      }
+      # This model is hard to find a FIRST integer-feasible point for (the run-length
+      # rules are highly combinatorial), so lean on the primal heuristics and
+      # multi-threading.  mip_heuristic_effort default is 0.05 — we raise it.
+      # Fall back gracefully if this highs build rejects any of these options.
+      mk_ctrl <- function(...) highs::highs_control(time_limit = time_limit,
+                                                    mip_rel_gap = mip_gap, ...)
+      ctrl <- tryCatch(
+        mk_ctrl(threads                            = as.integer(n_threads),
+                mip_heuristic_effort               = 0.3,
+                mip_heuristic_run_feasibility_jump = TRUE,
+                mip_detect_symmetry                = TRUE),
+        error = function(e)
+          tryCatch(mk_ctrl(threads = as.integer(n_threads)),
+                   error = function(e2) mk_ctrl()))
 
       result <- highs::highs_solve(
         L       = obj,
@@ -1224,8 +1371,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         rhs     = con_rhs,
         types   = types,
         maximum = TRUE,
-        control = highs::highs_control(time_limit  = SOLVER_TIME_LIMIT,
-                                       mip_rel_gap = SOLVER_MIP_GAP)
+        control = ctrl
       )
 
       sol <- result$primal_solution
@@ -1252,6 +1398,26 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       list(sol = sol, nP = nP, nD = nD, nS = nS, nX = nX, xidx = xidx, dates_vec = dates_vec)
     },
 
+    # ── Total coverage-objective value of a solved result (#10) ────────────────
+    # Mirrors the coverage weights in build_and_solve's objective so the polish
+    # phase can floor coverage at exactly what phase 1 achieved.
+    coverage_value = function(res, roam_in_obj = TRUE) {
+      sol  <- res$sol; xidx <- res$xidx
+      rw   <- if (roam_in_obj) 0.1 else 0
+      S_APP1 <- 1L; S_APP2 <- 2L; S_ROAM <- 3L; S_NIGHT <- 4L
+      total <- 0
+      for (pi in seq_len(res$nP)) {
+        for (di in seq_len(res$nD)) {
+          total <- total +
+            4   * round(sol[xidx(pi, di, S_APP1)])  +
+            0.1 * round(sol[xidx(pi, di, S_APP2)])  +
+            rw  * round(sol[xidx(pi, di, S_ROAM)])  +
+            0.1 * round(sol[xidx(pi, di, S_NIGHT)])
+        }
+      }
+      total
+    },
+
     # ── Record which off/vac dates were credited as PTO for each person-PP ──────
     # PTO is granted post-solve: if actual worked shifts < sched_target in a PP,
     # mark the first (deficit) off/vac days in that PP as PTO.
@@ -1276,7 +1442,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           # Count shifts actually assigned by LP in this PP
           actual_worked <- as.integer(sum(vapply(di_pp, function(di)
             any(vapply(seq_len(nS_r), function(s)
-              sol$primal[xidx(pi, di, s)] > 0.5, logical(1L))),
+              sol[xidx(pi, di, s)] > 0.5, logical(1L))),
             logical(1L))))
 
           sched_tgt <- self$targets[[person]][[pp_name]]$sched_target
