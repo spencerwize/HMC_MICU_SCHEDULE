@@ -124,7 +124,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Main entry point ──────────────────────────────────────────────────────
-    run = function(run_faster = FALSE) {
+    # start_tier: NULL = start at the first tier (default).  Otherwise the cascade
+    #   begins at the first matching tier and skips everything before it:
+    #     • a string matched against the tier label (substring, case-insensitive),
+    #       e.g. "B1-B", "B2", "Any run length" — useful when an early tier is
+    #       known-infeasible for the current iteration (e.g. skip "B1-A").
+    #     • an integer index into the (post-run_faster) tier list.
+    #   List the labels with SchedulerLP$new(...)$list_tiers().
+    run = function(run_faster = FALSE, start_tier = NULL) {
       if (!requireNamespace("highs", quietly = TRUE))
         stop("highs package is not installed. Run: install.packages('highs')")
 
@@ -132,7 +139,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       if (run_faster) tiers <- Filter(function(t) !isTRUE(t$fast_skip), tiers)
       nT    <- length(tiers)
 
-      for (ti in seq_len(nT)) {
+      start_idx <- private$resolve_start_tier(start_tier, tiers)
+      if (start_idx > 1L)
+        message(sprintf("  Skipping %d earlier tier(s); starting at tier %d/%d: %s",
+                        start_idx - 1L, start_idx, nT, tiers[[start_idx]]$label))
+
+      for (ti in seq.int(start_idx, nT)) {
         t <- tiers[[ti]]
         message(sprintf("  [Tier %d/%d] %s", ti, nT, t$label))
         result <- private$build_and_solve(
@@ -201,7 +213,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (!is.null(polished)) result <- polished
         }
 
-        self$tier_used <- list(index = ti, label = t$label)
+        self$tier_used <- list(index = ti, label = t$label, spec = t)
         private$populate_granted_pto(result)
         message("  Populating solution and filling APP3 slots…")
         private$populate_from_solution(result)
@@ -213,12 +225,29 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       private$report_and_stop()
     },
 
+    # ── List the relaxation tiers (index + label) the cascade will try ──────────
+    # Pass the index OR a label fragment to run(start_tier=...) to skip ahead.
+    # Set run_faster=TRUE to see the reduced list run(run_faster=TRUE) uses.
+    list_tiers = function(run_faster = FALSE) {
+      tiers <- private$RELAX_TIERS
+      if (run_faster) tiers <- Filter(function(t) !isTRUE(t$fast_skip), tiers)
+      df <- data.frame(
+        index = seq_along(tiers),
+        label = vapply(tiers, function(t) t$label, character(1L)),
+        stringsAsFactors = FALSE)
+      print(df, right = FALSE)
+      invisible(df)
+    },
+
     # ── Enumerate distinct feasible solutions via no-good cut iteration ───────
     # Adds a cut excluding each previously found x-assignment, then re-solves.
     # Returns integer count (lower bound; stops at max_count or infeasibility).
     count_solutions = function(max_count = 20L) {
       if (is.null(self$tier_used)) stop("Call run() before count_solutions().")
-      t     <- private$RELAX_TIERS[[self$tier_used$index]]
+      # Use the exact tier spec that produced the schedule (robust to run_faster /
+      # start_tier filtering, where the index no longer maps into RELAX_TIERS).
+      t     <- self$tier_used$spec
+      if (is.null(t)) t <- private$RELAX_TIERS[[self$tier_used$index]]
       found <- list()
       count <- 0L
       repeat {
@@ -321,6 +350,31 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # Cached base model (bounds + constraints) keyed by tier parameters; reused
     # across count_solutions() iterations and the fairness-polish solve (#6).
     .base_cache = NULL,
+
+    # ── Resolve a start_tier (NULL / index / label fragment) to a 1-based index ─
+    resolve_start_tier = function(start_tier, tiers) {
+      if (is.null(start_tier)) return(1L)
+      nT <- length(tiers)
+      if (is.numeric(start_tier)) {
+        idx <- as.integer(start_tier)
+        if (length(idx) != 1L || is.na(idx) || idx < 1L || idx > nT)
+          stop(sprintf("start_tier index must be in 1..%d (got %s)",
+                       nT, paste(start_tier, collapse = ",")), call. = FALSE)
+        return(idx)
+      }
+      if (is.character(start_tier) && length(start_tier) == 1L) {
+        labs <- vapply(tiers, function(t) t$label, character(1L))
+        hit  <- which(grepl(start_tier, labs, fixed = TRUE))
+        if (length(hit) == 0L)
+          hit <- which(grepl(start_tier, labs, ignore.case = TRUE))
+        if (length(hit) == 0L)
+          stop(sprintf("start_tier '%s' matched no tier label.\nAvailable tiers:\n  %s",
+                       start_tier, paste(labs, collapse = "\n  ")), call. = FALSE)
+        return(hit[1L])
+      }
+      stop("start_tier must be NULL, a single integer, or a single label string.",
+           call. = FALSE)
+    },
 
     # ── Availability helper ───────────────────────────────────────────────────
     is_blocked = function(person, d) {

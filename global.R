@@ -103,8 +103,10 @@ TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
                                      unset = TIMEOFF_GSHEET_URL)
 
 # ── Run the full pipeline and return a named list ─────────────────────────────
-run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
-                         verbose = TRUE) {
+run_pipeline <- function(path        = TIMEOFF_DEFAULT_SOURCE,
+                         verbose     = TRUE,
+                         run_faster  = FALSE,
+                         start_tier  = NULL) {   # NULL = first tier; else index or label fragment, e.g. "B1-B"
   if (verbose) message("Parsing time-off data...")
   time_off <- parse_time_off(path)
 
@@ -113,7 +115,7 @@ run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
 
   if (verbose) message("Running ILP scheduler...")
   sched    <- SchedulerLP$new(time_off, targets)
-  sched$run()
+  sched$run(run_faster = run_faster, start_tier = start_tier)
 
   if (verbose) message("Validating...")
   validation <- validate_schedule(sched, time_off, targets)

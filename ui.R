@@ -51,6 +51,11 @@ ui <- page_navbar(
         tags$small(class = "text-muted d-block mb-2",
           "Skips the min-run-3 and min-run-2 tiers in each block. Faster but may produce more short runs."
         ),
+        textInput("start_tier", "Start at tier (optional)", value = "",
+          placeholder = "e.g. B1-B  (blank = from the start)"),
+        tags$small(class = "text-muted d-block mb-2",
+          "Skip earlier relaxation tiers by label fragment (\"B1-B\", \"B2\", \"Any run length\") or index. Use when an early tier is known infeasible for this iteration."
+        ),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
