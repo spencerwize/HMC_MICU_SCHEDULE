@@ -1561,8 +1561,10 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           pp_name   <- PAY_PERIODS$name[ppi]
           worked    <- self$pp_counts[[person]][[pp_name]]
           if (is.null(worked) || is.na(worked)) worked <- 0L
-          sched_tgt <- self$targets[[person]][[pp_name]]$sched_target
-          deficit   <- max(0L, sched_tgt - worked)
+          # Measure against the relaxed FLOOR (soft_min), not the ceiling: landing
+          # anywhere in the [floor, ceiling] band is acceptable and earns no PTO.
+          floor_tgt <- self$targets[[person]][[pp_name]]$soft_min
+          deficit   <- max(0L, floor_tgt - worked)
           if (deficit == 0L) next
 
           pp_d  <- pp_dates(pp_name)

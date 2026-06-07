@@ -46,31 +46,32 @@ compute_targets <- function(time_off) {
           target <- if (avail_for_target >= base_target) base_target else base
           sched_target <- max(0L, target - credited)
 
-          # ── Relaxed target for heavy requested time off ───────────────────────
-          # Rather than crediting PTO after the fact, a lot of requested time off
-          # simply LOWERS the pay-period target (target = 6 − CME, then minus z):
+          tgt0 <- max(0L, target - credited)   # base target = 6 − CME (availability-limited)
+
+          # ── Relaxed band for heavy requested time off (replaces PTO) ──────────
+          # Heavy requested time off lowers the FLOOR and shrinks the ceiling.  The
+          # person AIMS for the base target but may settle as low as (base − z); no
+          # PTO is charged for landing anywhere in that band.  (Todd-style: aim
+          # high, OK lower.)
           #   z = 1 when requested (off + vac) days in the PP are in [5, 7]
           #   z = 2 when requested (off + vac) days in the PP are > 7
           #   z = 0 otherwise
-          # So someone who is off ~a week works one fewer shift, ~two weeks two
-          # fewer — no PTO crediting needed to cover the gap.
+          # Resulting band (minus CME):  z0 → 6..6 (firm)   z1 → 5..6   z2 → 4..5
           n_requested_off <- length(off_days) + length(vac_days)
           relaxed_by <- if (n_requested_off > 7L) 2L
                         else if (n_requested_off >= 5L) 1L
                         else 0L
-          sched_target <- max(0L, sched_target - relaxed_by)
 
-          # soft_min: scheduling urgency drops once this floor is reached.
-          # The person can still receive up to sched_target shifts; they are
-          # simply deprioritised relative to people below their own soft_min.
+          relaxed_floor <- max(0L, tgt0 - relaxed_by)        # min shifts (soft floor)
+          sched_target  <- min(tgt0, relaxed_floor + 1L)     # ceiling: floor+1, capped at base
+
+          # soft_min is the hard floor the LP must meet; sched_target is the ceiling
+          # it aims for.  FLEX staff (e.g. Todd) keep their own lower flex floor.
           flex_floor <- FLEX_TARGETS[[person]]
-          soft_min   <- if (!is.null(flex_floor)) {
+          soft_min   <- if (!is.null(flex_floor))
                           max(0L, min(as.integer(flex_floor), sched_target))
-                        } else {
-                          heavy_off <- (length(off_days) + length(vac_days)) >= 5L
-                          floor_val <- if (heavy_off) 4L else DEFAULT_SOFT_MIN
-                          max(0L, min(floor_val, sched_target))
-                        }
+                        else
+                          relaxed_floor
 
           list(
             pp_name      = pp_name,
