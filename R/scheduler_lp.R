@@ -1433,10 +1433,16 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         message(sprintf("  Solver: %s", result$status_message))
         return(NULL)
       }
-      # Reject LP-relaxation pseudo-solutions (returned when solver times out before
-      # finding any integer feasible point — all x values are fractional, round to 0).
-      # A valid schedule always has at least one x=1 because C2 mandates APP1 daily.
-      if (sum(round(sol[seq_len(nX)])) == 0L) {
+      # Accept iff HiGHS actually found an integer-feasible incumbent.  On a time
+      # limit it returns the BEST incumbent found so far — so this DOES keep the
+      # best-effort solution; it only skips when *no* feasible schedule was found
+      # (then primal_solution is a fractional LP relaxation, not a real schedule).
+      # Primary signal: info$primal_solution_status == "Feasible".  Fallback (older
+      # highs builds): a valid schedule always has ≥1 x=1 because C2 fills APP1 daily.
+      psol_status    <- result$info$primal_solution_status
+      feasible_flag  <- !is.null(psol_status) && identical(psol_status, "Feasible")
+      rounds_nonzero <- sum(round(sol[seq_len(nX)])) > 0L
+      if (!(feasible_flag || rounds_nonzero)) {
         message(sprintf("  Solver: %s (no integer solution found — skipping tier)",
                         result$status_message))
         return(NULL)
