@@ -33,10 +33,6 @@ compute_targets <- function(time_off) {
           all_off  <- unique(c(off_days, vac_days, cme_days))
           avail    <- sum(!p_dates %in% all_off)
 
-          # VAC days block scheduling (person can't work them) but do NOT reduce
-          # the 6-shift target.  Only hard-OFF days and CME days affect the target.
-          # If a person can't reach 6 due to too many VAC days, cleanup_pass will
-          # grant PTO credits to cover the shortfall.
           bt <- BASE_TARGETS[[person]]
           base_target <- if (is.null(bt)) {
             6L
@@ -49,6 +45,20 @@ compute_targets <- function(time_off) {
           base   <- min(base_target, avail_for_target + credited)
           target <- if (avail_for_target >= base_target) base_target else base
           sched_target <- max(0L, target - credited)
+
+          # ── Relaxed target for heavy requested time off ───────────────────────
+          # Rather than crediting PTO after the fact, a lot of requested time off
+          # simply LOWERS the pay-period target (target = 6 − CME, then minus z):
+          #   z = 1 when requested (off + vac) days in the PP are in [5, 7]
+          #   z = 2 when requested (off + vac) days in the PP are > 7
+          #   z = 0 otherwise
+          # So someone who is off ~a week works one fewer shift, ~two weeks two
+          # fewer — no PTO crediting needed to cover the gap.
+          n_requested_off <- length(off_days) + length(vac_days)
+          relaxed_by <- if (n_requested_off > 7L) 2L
+                        else if (n_requested_off >= 5L) 1L
+                        else 0L
+          sched_target <- max(0L, sched_target - relaxed_by)
 
           # soft_min: scheduling urgency drops once this floor is reached.
           # The person can still receive up to sched_target shifts; they are
@@ -67,6 +77,7 @@ compute_targets <- function(time_off) {
             avail        = avail,
             credited     = credited,
             target       = target,
+            relaxed_by   = relaxed_by,   # shifts removed from target for heavy time off
             sched_target = sched_target,
             soft_min     = soft_min,
             off_days     = off_days,
@@ -94,6 +105,7 @@ targets_summary_df <- function(targets) {
         avail        = info$avail,
         credited     = info$credited,
         target       = info$target,
+        relaxed_by   = info$relaxed_by,
         sched_target = info$sched_target,
         soft_min     = info$soft_min,
         stringsAsFactors = FALSE
