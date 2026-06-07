@@ -4,6 +4,11 @@
 
 server <- function(input, output, session) {
 
+  # ── Greedy warm-start cache (built once per time-off dataset) ──────────────
+  # The greedy seed only needs computing once; reuse it across Generate clicks
+  # and rebuild only when the underlying time-off data changes.
+  warm_cache <- list(time_off = NULL, ws = NULL)
+
   # ── Populate sheet dropdown on startup ────────────────────────────────────
   # Runs once; isolate() prevents googlesheets4 auth internals from creating
   # a reactive dependency that would re-trigger this observer later.
@@ -138,7 +143,20 @@ server <- function(input, output, session) {
           ps_list else NULL
       }
 
-      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule)
+      # Greedy warm start (built once, reused while the time-off data is unchanged).
+      warm_start <- NULL
+      if (isTRUE(input$use_warm_start)) {
+        if (is.null(warm_cache$ws) || !identical(warm_cache$time_off, time_off)) {
+          setProgress(0.3, detail = "Building greedy warm start (one-time)…")
+          greedy <- Scheduler$new(time_off, targets)
+          greedy$run()
+          warm_cache <<- list(time_off = time_off, ws = extract_warm_start(greedy))
+        }
+        warm_start <- warm_cache$ws
+      }
+
+      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule,
+                               warm_start = warm_start)
       start_tier <- if (!is.null(input$start_tier) && nzchar(trimws(input$start_tier)))
                       trimws(input$start_tier) else NULL
       sched$run(run_faster = isTRUE(input$run_faster), start_tier = start_tier)

@@ -56,6 +56,10 @@ ui <- page_navbar(
         tags$small(class = "text-muted d-block mb-2",
           "Skip earlier relaxation tiers by label fragment (\"B1-B\", \"B2\", \"Any run length\") or index. Use when an early tier is known infeasible for this iteration."
         ),
+        checkboxInput("use_warm_start", "Use greedy warm start", value = FALSE),
+        tags$small(class = "text-muted d-block mb-2",
+          "Seeds the solver with a fast greedy schedule so it finds a first solution sooner. Built once per dataset, reused across runs. The seed clears the min-run-2 tiers but not min-run-3 — pair with “Start at tier: B1-B” to skip B1-A."
+        ),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
