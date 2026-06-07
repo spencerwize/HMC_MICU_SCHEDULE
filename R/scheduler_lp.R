@@ -93,12 +93,19 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     granted_pto   = NULL,   # person -> Date vector (empty for ILP path)
     tier_used      = NULL,   # list(index, label) of relaxation tier that found a solution
     prior_schedule = NULL,  # person -> data.frame(date, type) for days before schedule start
+    warm_start     = NULL,  # data.frame(date, slot, person): MIP start (e.g. greedy seed)
 
     # ── Constructor ───────────────────────────────────────────────────────────
-    initialize = function(time_off, targets, prior_schedule = NULL) {
+    # warm_start: optional MIP start handed to HiGHS to skip the slow search for a
+    #   first feasible schedule.  Either a data.frame(date, slot, person) or a path
+    #   to an .rds file holding one (see save_warm_start()).  Build it once from the
+    #   greedy scheduler and reuse it across many LP runs.  An infeasible start is
+    #   silently ignored by HiGHS, so it can only help.
+    initialize = function(time_off, targets, prior_schedule = NULL, warm_start = NULL) {
       self$time_off       <- time_off
       self$targets        <- targets
       self$prior_schedule <- prior_schedule
+      self$warm_start     <- private$load_warm_start(warm_start)
       self$dates       <- all_dates()
       self$granted_pto <- setNames(
         lapply(STAFF, function(p) as.Date(character())), STAFF)
@@ -374,6 +381,43 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       }
       stop("start_tier must be NULL, a single integer, or a single label string.",
            call. = FALSE)
+    },
+
+    # ── Normalise a warm_start argument to a data.frame(date, slot, person) ─────
+    load_warm_start = function(ws) {
+      if (is.null(ws)) return(NULL)
+      if (is.character(ws) && length(ws) == 1L) {
+        if (!file.exists(ws))
+          stop(sprintf("warm_start file not found: %s", ws), call. = FALSE)
+        ws <- readRDS(ws)
+      }
+      if (!is.data.frame(ws) || !all(c("date", "slot", "person") %in% names(ws)))
+        stop("warm_start must be a data.frame with columns date, slot, person ",
+             "(or a path to an .rds file holding one).", call. = FALSE)
+      ws$date <- as.Date(ws$date)
+      ws[!is.na(ws$person) & nzchar(ws$person), c("date", "slot", "person")]
+    },
+
+    # ── Solve an assembled model with an optional MIP start (warm start) ────────
+    # Uses the OO highs_solver interface (highs_solve has no start hook) and
+    # returns a list shaped like highs_solve's result so the caller is agnostic.
+    solve_with_start = function(obj, lb, ub, A, lhs, rhs, types, ctrl,
+                                warm_idx, warm_val) {
+      ns    <- getNamespace("highs")
+      model <- get("highs_model", ns)(
+        L = obj, lower = lb, upper = ub, A = A, lhs = lhs, rhs = rhs,
+        types = types, maximum = TRUE)
+      hi <- get("highs_solver", ns)(model, ctrl)
+      # 1-based variable indices; an infeasible start is ignored by HiGHS.
+      try(get("solver_set_solution_vec", ns)(hi$solver,
+            as.integer(warm_idx), as.double(warm_val)), silent = TRUE)
+      hi$solve()
+      sol  <- hi$solution()
+      info <- hi$info()
+      list(primal_solution = sol$col_value,
+           status_message  = hi$status_message(),
+           objective_value = info$objective_function_value,
+           info            = info)
     },
 
     # ── Availability helper ───────────────────────────────────────────────────
@@ -1416,17 +1460,40 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           tryCatch(mk_ctrl(threads = as.integer(n_threads)),
                    error = function(e2) mk_ctrl()))
 
-      result <- highs::highs_solve(
-        L       = obj,
-        lower   = lb,
-        upper   = ub,
-        A       = A,
-        lhs     = con_lhs,
-        rhs     = con_rhs,
-        types   = types,
-        maximum = TRUE,
-        control = ctrl
-      )
+      # ── Warm start (#1): map the saved (date,slot,person) seed to x indices ───
+      # Only the x variables are integer, so seeding all nX of them fully specifies
+      # the integer solution; HiGHS LP-completes the continuous auxiliaries.
+      warm_idx <- NULL
+      if (!is.null(self$warm_start) && nrow(self$warm_start) > 0L) {
+        slot_map <- c(APP1 = S_APP1, APP2 = S_APP2, Roaming = S_ROAM, Night = S_NIGHT)
+        xv       <- numeric(nX)
+        ws       <- self$warm_start
+        pis      <- match(ws$person, STAFF)
+        dis      <- match(ws$date,   dates_vec)
+        sis      <- slot_map[ws$slot]
+        ok       <- !is.na(pis) & !is.na(dis) & !is.na(sis)
+        if (any(ok))
+          xv[vapply(which(ok), function(r) xidx(pis[r], dis[r], sis[r]), integer(1L))] <- 1
+        warm_idx <- seq_len(nX)
+        warm_val <- xv
+      }
+
+      if (is.null(warm_idx)) {
+        result <- highs::highs_solve(
+          L       = obj,
+          lower   = lb,
+          upper   = ub,
+          A       = A,
+          lhs     = con_lhs,
+          rhs     = con_rhs,
+          types   = types,
+          maximum = TRUE,
+          control = ctrl
+        )
+      } else {
+        result <- private$solve_with_start(obj, lb, ub, A, con_lhs, con_rhs,
+                                           types, ctrl, warm_idx, warm_val)
+      }
 
       sol <- result$primal_solution
       if (is.null(sol)) {

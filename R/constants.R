@@ -65,7 +65,7 @@ FLEX_TARGETS <- list(
 #     tightened constraints, and mip_heuristic_effort (set in scheduler_lp.R).
 #   • If hard instances still abandon tier 1 here, raise this; if real runs always
 #     stop on the gap in a few minutes, you can safely lower it.
-SOLVER_TIME_LIMIT <- 60*60*2
+SOLVER_TIME_LIMIT <- 60*60*6.5
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap

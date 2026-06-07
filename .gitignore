@@ -2,3 +2,4 @@
 # Local input file — not committed (contains PII)
 Time_Off_Requests.xlsx
 .Rproj.user
+*greedy_start*.rds
