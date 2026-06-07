@@ -221,10 +221,12 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         }
 
         self$tier_used <- list(index = ti, label = t$label, spec = t)
-        private$populate_granted_pto(result)
         message("  Populating solution and filling APP3 slots…")
         private$populate_from_solution(result)
         private$fill_roaming_pass()
+        # PTO is computed last, from the FINAL shift counts (LP + roaming fill),
+        # so nobody who actually reached their target is given a PTO day.
+        private$populate_granted_pto()
         message("  Done.")
         return(invisible(self))
       }
@@ -1546,36 +1548,25 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     },
 
     # ── Record which off/vac dates were credited as PTO for each person-PP ──────
-    # PTO is granted post-solve: if actual worked shifts < sched_target in a PP,
+    # PTO is granted post-solve: if FINAL worked shifts < sched_target in a PP,
     # mark the first (deficit) off/vac days in that PP as PTO.
-    populate_granted_pto = function(result) {
-      sol       <- result$sol
-      xidx      <- result$xidx
-      nP_r      <- result$nP
-      nD_r      <- result$nD
-      nS_r      <- result$nS
-      dates_vec <- result$dates_vec
-
-      for (pi in seq_len(length(STAFF))) {
-        person <- STAFF[pi]
-        pdata  <- self$time_off[[person]]
+    # MUST run AFTER fill_roaming_pass() and read self$pp_counts (the final count
+    # incl. roaming-fill shifts) — counting the raw LP solution alone under-counts
+    # the roaming fill and grants PTO that isn't actually needed.
+    populate_granted_pto = function() {
+      for (person in STAFF) {
+        pdata <- self$time_off[[person]]
+        if (is.null(pdata) || nrow(pdata) == 0L) next
         for (ppi in seq_len(nrow(PAY_PERIODS))) {
-          pp_name <- PAY_PERIODS$name[ppi]
-          pp_d    <- pp_dates(pp_name)
-          pp_in   <- pp_d[pp_d %in% dates_vec]
-          di_pp   <- which(dates_vec %in% pp_in)
-          if (length(di_pp) == 0L) next
-
-          # Count shifts actually assigned by LP in this PP
-          actual_worked <- as.integer(sum(vapply(di_pp, function(di)
-            any(vapply(seq_len(nS_r), function(s)
-              sol[xidx(pi, di, s)] > 0.5, logical(1L))),
-            logical(1L))))
-
+          pp_name   <- PAY_PERIODS$name[ppi]
+          worked    <- self$pp_counts[[person]][[pp_name]]
+          if (is.null(worked) || is.na(worked)) worked <- 0L
           sched_tgt <- self$targets[[person]][[pp_name]]$sched_target
-          deficit   <- max(0L, sched_tgt - actual_worked)
-          if (deficit == 0L || is.null(pdata) || nrow(pdata) == 0L) next
+          deficit   <- max(0L, sched_tgt - worked)
+          if (deficit == 0L) next
 
+          pp_d  <- pp_dates(pp_name)
+          pp_in <- pp_d[pp_d %in% self$dates]
           offvac_dates <- sort(pp_in[vapply(pp_in,
             function(d) any(pdata$date == d & pdata$type %in% c("off", "vac")),
             logical(1L))])
