@@ -714,21 +714,24 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
                      night_req=FALSE, pp_red=1L, c_min=TRUE,
                      c8=TRUE,  c8b=TRUE,  c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=TRUE,  c11c=TRUE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
-          mk_nuclear("Drop C8 + C11b (day→night gap + PP-stretch rule)",
+          # NOTE: C8 (day→night, next-day) is HARD in EVERY tier and is never
+          # dropped — a day shift immediately followed by a night shift is
+          # absolutely disallowed.  Only C8b (the softer 2-day rest buffer) relaxes.
+          mk_nuclear("Drop C8b + C11b (2-day rest buffer + PP-stretch rule)",
                      night_req=FALSE, pp_red=1L, c_min=TRUE,
-                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=TRUE,
+                     c8=TRUE,  c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=TRUE,
                      night_min=NULL, night_max=NULL, c13=TRUE, c14=TRUE),
-          mk_nuclear("Drop C8 + C11b + C13 / drop shift minimums + weekend bounds",
+          mk_nuclear("Drop C8b + C11b + C13 / drop shift minimums + weekend bounds",
                      night_req=FALSE, pp_red=1L, c_min=FALSE,
-                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=FALSE,
+                     c8=TRUE,  c8b=FALSE, c9=TRUE,  c10=TRUE,  c10c=TRUE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
-          mk_nuclear("Drop C8 + C11b + C13 + C10",
+          mk_nuclear("Drop C8b + C11b + C13 + C10",
                      night_req=FALSE, pp_red=1L, c_min=FALSE,
-                     c8=FALSE, c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=TRUE, c11b=FALSE, c11c=FALSE,
+                     c8=TRUE,  c8b=FALSE, c9=TRUE,  c10=FALSE, c10c=TRUE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=TRUE),
-          mk_nuclear("Hard coverage only (C1-C7, C11, C12)",
+          mk_nuclear("Hard coverage + day→night ban (C1-C8, C11, C12)",
                      night_req=TRUE,  pp_red=0L, c_min=FALSE,
-                     c8=FALSE, c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
+                     c8=TRUE,  c8b=FALSE, c9=FALSE, c10=FALSE, c10c=FALSE, c11b=FALSE, c11c=FALSE,
                      night_min=NULL, night_max=NULL, c13=FALSE, c14=FALSE)
         )
       )
@@ -1972,8 +1975,8 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
     # ── Phase 2: greedy APP3 fill-in for under-scheduled staff ─────────────────
     # Runs after the ILP solution is committed.  Assigns empty Roaming slots to
     # people who are below their sched_target for that PP.  All hard constraints
-    # (availability, no double-booking, C7 night→day ban, C10 max-4-consec, PP
-    # cap) are respected; run-length isolation rules (C8/C15/C16) are relaxed.
+    # (availability, no double-booking, C7 night→day ban, C8 day→night ban, C10
+    # max-4-consec, PP cap) are respected; isolation rules (C15/C16) are relaxed.
     fill_roaming_pass = function() {
       # Use explicit index iteration to guarantee Date class is preserved on each d
       dates_vec <- sort(as.Date(names(self$schedule)))
@@ -1993,6 +1996,14 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
             return(TRUE)
         }
         FALSE
+      }
+
+      works_night_next <- function(person, d) {
+        # C8: block if person works Night on d+1 — adding a day shift on d would
+        # create a day→night, which is absolutely disallowed.
+        ns <- format(d + 1L, "%Y-%m-%d")
+        isTRUE(ns %in% names(self$schedule)) &&
+          isTRUE(self$schedule[[ns]]$Night == person)
       }
 
       # C10: adding d would create a run of 5+ consecutive work days
@@ -2036,6 +2047,7 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
           if (private$is_blocked(person, d)) next
           if (is_working_p(person, d)) next
           if (had_night_recent(person, d)) next
+          if (works_night_next(person, d)) next   # C8: never create a day→night
           if (would_exceed_consec(person, d)) next
 
           shifts_df      <- self$person_shifts[[person]]
