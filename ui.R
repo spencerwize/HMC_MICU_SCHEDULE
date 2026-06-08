@@ -60,6 +60,10 @@ ui <- page_navbar(
         tags$small(class = "text-muted d-block mb-2",
           "Seeds the solver with a fast greedy schedule so it finds a first solution sooner. Built once per dataset, reused across runs. The seed clears the min-run-2 tiers but not min-run-3 — pair with “Start at tier: B1-B” to skip B1-A."
         ),
+        checkboxInput("decompose", "Solve pay-period by pay-period (faster)", value = FALSE),
+        tags$small(class = "text-muted d-block mb-2",
+          "Solves each pay period as its own small problem, stitching the boundaries and pacing each person’s nights/weekends so the group stays balanced. Far faster to find a first solution on hard inputs; season totals still land in range."
+        ),
         actionButton("run_btn", "Generate Schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",

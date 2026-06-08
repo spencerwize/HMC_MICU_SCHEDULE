@@ -65,7 +65,7 @@ FLEX_TARGETS <- list(
 #     tightened constraints, and mip_heuristic_effort (set in scheduler_lp.R).
 #   • If hard instances still abandon tier 1 here, raise this; if real runs always
 #     stop on the gap in a few minutes, you can safely lower it.
-SOLVER_TIME_LIMIT <- 60*60*6.5
+SOLVER_TIME_LIMIT <- 60*60*2
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap
@@ -74,7 +74,7 @@ SOLVER_MIP_GAP   <- 0.09
 
 # Number of threads HiGHS may use for parallel branch-and-bound.
 # 0 = autodetect (parallel::detectCores()); a positive integer pins the count.
-SOLVER_THREADS <- 0L
+SOLVER_THREADS <- parallel::detectCores()
 
 # ── Fairness-polish phase (see SchedulerLP$run) ──────────────────────────────
 # After the cascade finds a feasible tier, a second "polish" solve re-optimises

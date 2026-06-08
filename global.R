@@ -107,7 +107,8 @@ run_pipeline <- function(path        = TIMEOFF_DEFAULT_SOURCE,
                          verbose     = TRUE,
                          run_faster  = FALSE,
                          start_tier  = NULL,    # NULL = first tier; else index or label fragment, e.g. "B1-B"
-                         warm_start  = NULL) {  # NULL, a data.frame(date,slot,person), or path to an .rds (see save_warm_start)
+                         warm_start  = NULL,    # NULL, a data.frame(date,slot,person), or path to an .rds (see save_warm_start)
+                         decompose   = FALSE) { # TRUE = solve pay-period by pay-period (faster; see SchedulerLP$run)
   if (verbose) message("Parsing time-off data...")
   time_off <- parse_time_off(path)
 
@@ -116,7 +117,7 @@ run_pipeline <- function(path        = TIMEOFF_DEFAULT_SOURCE,
 
   if (verbose) message("Running ILP scheduler...")
   sched    <- SchedulerLP$new(time_off, targets, warm_start = warm_start)
-  sched$run(run_faster = run_faster, start_tier = start_tier)
+  sched$run(run_faster = run_faster, start_tier = start_tier, decompose = decompose)
 
   if (verbose) message("Validating...")
   validation <- validate_schedule(sched, time_off, targets)

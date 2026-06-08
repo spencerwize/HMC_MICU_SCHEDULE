@@ -159,7 +159,8 @@ server <- function(input, output, session) {
                                warm_start = warm_start)
       start_tier <- if (!is.null(input$start_tier) && nzchar(trimws(input$start_tier)))
                       trimws(input$start_tier) else NULL
-      sched$run(run_faster = isTRUE(input$run_faster), start_tier = start_tier)
+      sched$run(run_faster = isTRUE(input$run_faster), start_tier = start_tier,
+                decompose  = isTRUE(input$decompose))
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
