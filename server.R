@@ -646,20 +646,9 @@ server <- function(input, output, session) {
       })
     })) %>% bind_rows()
 
-    # Compute PTO granted per person-PP from sched$granted_pto
-    pto_df <- do.call(rbind, lapply(STAFF, function(person) {
-      pto_dates <- p$sched$granted_pto[[person]]
-      lapply(PAY_PERIODS$name, function(pp) {
-        pp_row <- PAY_PERIODS[PAY_PERIODS$name == pp, ]
-        n <- if (length(pto_dates) == 0L) 0L else
-          sum(pto_dates >= pp_row$start & pto_dates <= pp_row$end)
-        data.frame(person = person, pp = pp, pto_granted = n,
-                   stringsAsFactors = FALSE)
-      })
-    })) %>% bind_rows()
-
+    # PTO is no longer scheduled; pto_needed (from targets) is the amount each
+    # person needs this PP, tracked for reporting only.
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
-      left_join(pto_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
         actual < soft_min     ~ "Below minimum",
         actual < sched_target ~ "Under",
@@ -676,8 +665,9 @@ server <- function(input, output, session) {
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
         soft_min     = colDef(name = "Min Floor",    width = 80),
-        pto_granted  = colDef(name = "PTO Credited", width = 100,
-          cell = function(v) if (!is.na(v) && v > 0L) as.character(v) else "—"),
+        pto_needed   = colDef(name = "PTO Needed",   width = 100,
+          cell   = function(v) if (!is.na(v) && v > 0L) as.character(v) else "—",
+          footer = function(values) sprintf("Total: %d", sum(values, na.rm = TRUE))),
         actual       = colDef(name = "Actual",       width = 70),
         status       = colDef(name = "Status",       width = 115,
           style = function(value) {

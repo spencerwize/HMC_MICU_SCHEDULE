@@ -425,10 +425,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
       ppi    <- targets[[person]][[ppn]]
-      pp_row <- PAY_PERIODS[PAY_PERIODS$name == ppn, ]
-      vac_in_pp <- pdata$type == "vac" &
-        pdata$date >= pp_row$start & pdata$date <= pp_row$end
-      if (ppi$avail < 6L) n_pto <- n_pto + sum(vac_in_pp)
+      # PTO needed = the target reduction from requested time off (tracked, not
+      # scheduled); see compute_targets().
+      n_pto  <- n_pto + (if (is.null(ppi$pto_needed)) 0L else ppi$pto_needed)
       actual <- sched_obj$pp_counts[[person]][[ppn]]
       if (actual < ppi$sched_target)
         n_bump <- n_bump + (ppi$sched_target - actual)
@@ -603,7 +602,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Max Consecutive Nights",    "3"),
     list("Max Consecutive Work Days", "4"),
     list("PTO Logic",
-         "Vacation in a PP where available days < 6 counts as PTO (target-reducing)"))
+         paste("Requested off/vac days in a PP lower the target and that amount =",
+               "PTO needed (5-6→1, 7-8→2, 9-10→3, 11→4, 12→5, 13-14→6);",
+               "tracked, not scheduled")))
 
   for (rl in rules) {
     mergeCells(wb, "Summary", cols = 2:SUM_COLS, rows = srow)

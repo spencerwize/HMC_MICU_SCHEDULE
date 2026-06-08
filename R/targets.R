@@ -41,44 +41,43 @@ compute_targets <- function(time_off) {
           } else {
             as.integer(bt)
           }
-          avail_for_target <- sum(!p_dates %in% unique(c(off_days, cme_days)))
-          base   <- min(base_target, avail_for_target + credited)
-          target <- if (avail_for_target >= base_target) base_target else base
-          sched_target <- max(0L, target - credited)
-
-          tgt0 <- max(0L, target - credited)   # base target = 6 − CME (availability-limited)
-
-          # ── Relaxed band for heavy requested time off (replaces PTO) ──────────
-          # Heavy requested time off lowers the FLOOR and shrinks the ceiling.  The
-          # person AIMS for the base target but may settle as low as (base − z); no
-          # PTO is charged for landing anywhere in that band.  (Todd-style: aim
-          # high, OK lower.)
-          #   z = 1 when requested (off + vac) days in the PP are in [5, 7]
-          #   z = 2 when requested (off + vac) days in the PP are > 7
-          #   z = 0 otherwise
-          # Resulting band (minus CME):  z0 → 6..6 (firm)   z1 → 5..6   z2 → 4..5
+          # ── Hard target = base − CME − PTO-reduction(requested time off) ──────
+          # The target is FIRM (no soft band).  Requested off+vac days in the PP
+          # lower the target by a fixed amount, and that SAME amount is the PTO the
+          # person needs (tracked for reporting, never scheduled):
+          #   off+vac in PP:  ≤4 → 0   5-6 → 1   7-8 → 2   9-10 → 3
+          #                   11 → 4   12 → 5    13-14 → 6
+          # (The stated ranges overlap at 10; resolved to 3 so the 5-6/7-8/9-10
+          #  pairs stay regular.)
           n_requested_off <- length(off_days) + length(vac_days)
-          relaxed_by <- if (n_requested_off > 7L) 2L
-                        else if (n_requested_off >= 5L) 1L
+          pto_needed <- if (n_requested_off >= 13L) 6L
+                        else if (n_requested_off == 12L) 5L
+                        else if (n_requested_off == 11L) 4L
+                        else if (n_requested_off >=  9L) 3L
+                        else if (n_requested_off >=  7L) 2L
+                        else if (n_requested_off >=  5L) 1L
                         else 0L
 
-          relaxed_floor <- max(0L, tgt0 - relaxed_by)        # min shifts (soft floor)
-          sched_target  <- min(tgt0, relaxed_floor + 1L)     # ceiling: floor+1, capped at base
+          # base_target is 6 by default (BASE_TARGETS may override per person/PP).
+          # Clamp to available work days so the firm target is never unachievable.
+          target       <- max(0L, base_target - credited - pto_needed)
+          target       <- min(target, avail)
+          sched_target <- target
 
-          # soft_min is the hard floor the LP must meet; sched_target is the ceiling
-          # it aims for.  FLEX staff (e.g. Todd) keep their own lower flex floor.
+          # Firm target → floor == ceiling.  FLEX staff (e.g. Todd) keep their own
+          # lower flexibility floor.
           flex_floor <- FLEX_TARGETS[[person]]
           soft_min   <- if (!is.null(flex_floor))
-                          max(0L, min(as.integer(flex_floor), sched_target))
+                          max(0L, min(as.integer(flex_floor), target))
                         else
-                          relaxed_floor
+                          target
 
           list(
             pp_name      = pp_name,
             avail        = avail,
             credited     = credited,
             target       = target,
-            relaxed_by   = relaxed_by,   # shifts removed from target for heavy time off
+            pto_needed   = pto_needed,   # PTO needed this PP (tracked, NOT scheduled)
             sched_target = sched_target,
             soft_min     = soft_min,
             off_days     = off_days,
@@ -106,7 +105,7 @@ targets_summary_df <- function(targets) {
         avail        = info$avail,
         credited     = info$credited,
         target       = info$target,
-        relaxed_by   = info$relaxed_by,
+        pto_needed   = info$pto_needed,
         sched_target = info$sched_target,
         soft_min     = info$soft_min,
         stringsAsFactors = FALSE
