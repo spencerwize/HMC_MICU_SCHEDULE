@@ -425,10 +425,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
       ppi    <- targets[[person]][[ppn]]
-      pp_row <- PAY_PERIODS[PAY_PERIODS$name == ppn, ]
-      vac_in_pp <- pdata$type == "vac" &
-        pdata$date >= pp_row$start & pdata$date <= pp_row$end
-      if (ppi$avail < 6L) n_pto <- n_pto + sum(vac_in_pp)
+      # PTO needed is derived from the off/vac day count per PP (see targets.R).
+      n_pto  <- n_pto + (if (is.null(ppi$pto_needed)) 0L else ppi$pto_needed)
       actual <- sched_obj$pp_counts[[person]][[ppn]]
       if (actual < ppi$sched_target)
         n_bump <- n_bump + (ppi$sched_target - actual)
@@ -475,6 +473,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("APP 3 Shifts",             "n_roam",   C_GRAY_LT, FALSE),
     list("Weekend Shifts",           "n_wknd",   "#FFFFFF",  FALSE),
     list("Req. Off Days",             "n_reqoff", C_PEACH,    FALSE),
+    list("PTO Needed",                "n_pto",    "#FFFFFF",  FALSE),
     list("Shortfall (shift-days)",   "n_bump",   "#FFFFFF",  FALSE))
 
   for (ov in ovr_rows) {
@@ -603,7 +602,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Max Consecutive Nights",    "3"),
     list("Max Consecutive Work Days", "4"),
     list("PTO Logic",
-         "Vacation in a PP where available days < 6 counts as PTO (target-reducing)"))
+         paste("PTO needed per PP is set by OFF+VAC days requested:",
+               "5-6→1, 7-8→2, 9-10→3, 11-12→4, 13→5, 14→6.",
+               "Target = 6 - CME - PTO. PTO is a count only — not pinned to specific days.")))
 
   for (rl in rules) {
     mergeCells(wb, "Summary", cols = 2:SUM_COLS, rows = srow)

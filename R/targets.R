@@ -2,10 +2,34 @@
 # targets.R  —  Compute per-person per-PP shift targets
 #
 # Returns: named list  person -> named list  pp_name -> list(
-#   avail, credited, target, sched_target,
+#   avail, credited, target, sched_target, pto_needed,
 #   off_days, vac_days, cme_days, pp_dates
 # )
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Map the number of OFF + VAC days requested in a pay period to the target
+# reduction (and equivalently the PTO days needed to backfill the shortfall).
+# CME days are excluded here — they reduce the base target separately
+# (base = 6 - CME) and are credited, not PTO.
+#
+#   off/vac days   target ↓ / PTO needed
+#   ────────────   ─────────────────────
+#   0–4                 0
+#   5–6                 1
+#   7–8                 2
+#   9–10                3
+#   11–12               4
+#   13                  5
+#   14                  6
+pto_reduction <- function(n_offvac) {
+  if (n_offvac <= 4L)  return(0L)
+  if (n_offvac <= 6L)  return(1L)
+  if (n_offvac <= 8L)  return(2L)
+  if (n_offvac <= 10L) return(3L)
+  if (n_offvac <= 12L) return(4L)
+  if (n_offvac <= 13L) return(5L)
+  6L
+}
 
 compute_targets <- function(time_off) {
   targets <- setNames(
@@ -33,10 +57,7 @@ compute_targets <- function(time_off) {
           all_off  <- unique(c(off_days, vac_days, cme_days))
           avail    <- sum(!p_dates %in% all_off)
 
-          # VAC days block scheduling (person can't work them) but do NOT reduce
-          # the 6-shift target.  Only hard-OFF days and CME days affect the target.
-          # If a person can't reach 6 due to too many VAC days, cleanup_pass will
-          # grant PTO credits to cover the shortfall.
+          # Base target per PP (default 6, optionally overridden per person/PP).
           bt <- BASE_TARGETS[[person]]
           base_target <- if (is.null(bt)) {
             6L
@@ -45,9 +66,18 @@ compute_targets <- function(time_off) {
           } else {
             as.integer(bt)
           }
-          avail_for_target <- sum(!p_dates %in% unique(c(off_days, cme_days)))
-          base   <- min(base_target, avail_for_target + credited)
-          target <- if (avail_for_target >= base_target) base_target else base
+
+          # Target adjustment: the number of OFF + VAC days requested in this PP
+          # bumps the target down and defines how many PTO days are needed to
+          # backfill the resulting shortfall (see pto_reduction()).  CME days are
+          # handled separately via `credited` (base = 6 - CME).
+          n_offvac   <- length(unique(c(off_days, vac_days)))
+          pto_needed <- pto_reduction(n_offvac)
+
+          # `target`       — adjusted shift target before CME credit
+          # `sched_target` — actual shifts the solver/fill should assign
+          #                  ( = 6 - CME - pto_reduction, floored at 0 )
+          target       <- max(0L, base_target - pto_needed)
           sched_target <- max(0L, target - credited)
 
           # soft_min: scheduling urgency drops once this floor is reached.
@@ -68,6 +98,7 @@ compute_targets <- function(time_off) {
             credited     = credited,
             target       = target,
             sched_target = sched_target,
+            pto_needed   = pto_needed,
             soft_min     = soft_min,
             off_days     = off_days,
             vac_days     = vac_days,
@@ -95,6 +126,7 @@ targets_summary_df <- function(targets) {
         credited     = info$credited,
         target       = info$target,
         sched_target = info$sched_target,
+        pto_needed   = info$pto_needed,
         soft_min     = info$soft_min,
         stringsAsFactors = FALSE
       )

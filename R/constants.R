@@ -56,12 +56,17 @@ FLEX_TARGETS <- list(
 )
 
 # ILP solver wall-clock budget per candidate (seconds).
-SOLVER_TIME_LIMIT <- 60*60*12
+SOLVER_TIME_LIMIT <- 60*60*1.5
 # Stop early when best integer solution is within this fraction of the LP bound.
 # The LP relaxation is inherently ~8-9% above the integer optimum for this problem
 # (fractional person-days + night-spread auxiliaries all relax to 1.0), so a gap
 # of 0.09 accepts the integer optimum without wasting time chasing the LP ceiling.
-SOLVER_MIP_GAP   <- 0.09
+SOLVER_MIP_GAP   <- 0.1
+# Number of solver threads. HiGHS defaults to 1 thread; using all-but-one core
+# lets it parallelise the branch-and-bound search and find a first incumbent
+# faster on this large MIP. Falls back to 1 if core detection fails.
+SOLVER_THREADS   <- tryCatch(max(1L, parallel::detectCores() - 1L),
+                             error = function(e) 1L)
 # Soft-minimum total shift counts per person across the FULL schedule.
 # The solver penalises falling below these floors in the objective but they
 # are not hard constraints — availability/vacation may prevent reaching them.

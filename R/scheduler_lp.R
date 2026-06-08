@@ -160,7 +160,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         if (is.null(result)) next
 
         self$tier_used <- list(index = ti, label = t$label)
-        private$populate_granted_pto(result)
+        # PTO is reported as a per-PP count (targets$pto_needed) in the summary
+        # sheet, not pinned onto specific calendar days — so granted_pto is left
+        # empty and OFF/VAC days render as themselves on the schedule grid.
         message("  Populating solution and filling APP3 slots…")
         private$populate_from_solution(result)
         private$fill_roaming_pass()
@@ -523,7 +525,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
       obj[I_MAX_NIGHTS] <- -5.0;  obj[I_MIN_NIGHTS] <- +5.0
       obj[I_MAX_TOTAL]  <- -2.0;  obj[I_MIN_TOTAL]  <- +2.0
       obj[I_MAX_WKND]   <- -3.0;  obj[I_MIN_WKND]   <- +3.0
-      obj[I_MAX_ROAM]   <- -0.5;  obj[I_MIN_ROAM]   <- +0.5
+      # APP3 (Roaming) evenness intentionally ignored — no spread penalty so the
+      # solver is free to distribute Roaming slots however best fills coverage.
+      obj[I_MAX_ROAM]   <- 0;     obj[I_MIN_ROAM]   <- 0
 
       # Run-length preferences: 3-consecutive > 4-consecutive > 2-consecutive > isolated
       # Work days: 3=+2.5, 4=+1.0, 2=0, 1=-5.0
@@ -1210,8 +1214,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
 
       # ── Assemble and solve ────────────────────────────────────────────────────
       nCont <- nF + nW + nNS3 + nNS4 + nWS3 + nWS4 + nNSSHORT + nWSSHORT
-      message(sprintf("  ILP: %d binary + %d continuous, %d constraints",
-                      nX, nCont, n_con))
+      message(sprintf("  ILP: %d binary + %d continuous, %d constraints (%d thread%s)",
+                      nX, nCont, n_con, SOLVER_THREADS,
+                      if (SOLVER_THREADS == 1L) "" else "s"))
 
       A <- Matrix::sparseMatrix(i = ri, j = ci, x = vi, dims = c(n_con, nV))
 
@@ -1225,7 +1230,9 @@ SchedulerLP <- R6::R6Class("SchedulerLP",
         types   = types,
         maximum = TRUE,
         control = highs::highs_control(time_limit  = SOLVER_TIME_LIMIT,
-                                       mip_rel_gap = SOLVER_MIP_GAP)
+                                       mip_rel_gap = SOLVER_MIP_GAP,
+                                       threads     = SOLVER_THREADS,
+                                       parallel    = "on")
       )
 
       sol <- result$primal_solution
