@@ -103,8 +103,12 @@ TIMEOFF_DEFAULT_SOURCE <- Sys.getenv("TIMEOFF_SOURCE",
                                      unset = TIMEOFF_GSHEET_URL)
 
 # ── Run the full pipeline and return a named list ─────────────────────────────
-run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
-                         verbose = TRUE) {
+run_pipeline <- function(path        = TIMEOFF_DEFAULT_SOURCE,
+                         verbose     = TRUE,
+                         run_faster  = FALSE,
+                         start_tier  = NULL,    # NULL = first tier; else index or label fragment, e.g. "B1-B"
+                         warm_start  = NULL,    # NULL, a data.frame(date,slot,person), or path to an .rds (see save_warm_start)
+                         decompose   = FALSE) { # TRUE = solve pay-period by pay-period (faster; see SchedulerLP$run)
   if (verbose) message("Parsing time-off data...")
   time_off <- parse_time_off(path)
 
@@ -112,8 +116,8 @@ run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
   targets  <- compute_targets(time_off)
 
   if (verbose) message("Running ILP scheduler...")
-  sched    <- SchedulerLP$new(time_off, targets)
-  sched$run()
+  sched    <- SchedulerLP$new(time_off, targets, warm_start = warm_start)
+  sched$run(run_faster = run_faster, start_tier = start_tier, decompose = decompose)
 
   if (verbose) message("Validating...")
   validation <- validate_schedule(sched, time_off, targets)
@@ -127,4 +131,39 @@ run_pipeline <- function(path    = TIMEOFF_DEFAULT_SOURCE,
     df         = sched$to_dataframe(),
     grid       = sched$to_person_grid(time_off, targets)
   )
+}
+
+# ── Warm start (MIP seed) helpers ─────────────────────────────────────────────
+# Flatten any scheduler's $schedule (date -> list(APP1,APP2,Roaming,Night)) into
+# a tidy data.frame(date, slot, person) suitable as a SchedulerLP warm start.
+extract_warm_start <- function(sched) {
+  slots <- c("APP1", "APP2", "Roaming", "Night")
+  rows  <- lapply(names(sched$schedule), function(ds) {
+    day <- sched$schedule[[ds]]
+    do.call(rbind, lapply(slots, function(slot) {
+      p <- day[[slot]]
+      if (is.null(p) || is.na(p) || !nzchar(p)) return(NULL)
+      data.frame(date = as.Date(ds), slot = slot, person = p,
+                 stringsAsFactors = FALSE)
+    }))
+  })
+  rows <- do.call(rbind, rows)
+  if (is.null(rows))
+    rows <- data.frame(date = as.Date(character()), slot = character(),
+                       person = character(), stringsAsFactors = FALSE)
+  rows
+}
+
+# Run the FAST greedy scheduler once and save its schedule as a warm start.
+# Do this a single time, then reuse `path` across many SchedulerLP runs:
+#   save_warm_start(time_off, targets, "greedy_start.rds")
+#   SchedulerLP$new(time_off, targets, warm_start = "greedy_start.rds")$run(...)
+save_warm_start <- function(time_off, targets, path, verbose = TRUE) {
+  if (verbose) message("Building greedy warm start (Scheduler)…")
+  greedy <- Scheduler$new(time_off, targets)
+  greedy$run()
+  ws <- extract_warm_start(greedy)
+  saveRDS(ws, path)
+  if (verbose) message(sprintf("  Saved %d assignments → %s", nrow(ws), path))
+  invisible(ws)
 }

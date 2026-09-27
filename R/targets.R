@@ -33,10 +33,6 @@ compute_targets <- function(time_off) {
           all_off  <- unique(c(off_days, vac_days, cme_days))
           avail    <- sum(!p_dates %in% all_off)
 
-          # VAC days block scheduling (person can't work them) but do NOT reduce
-          # the 6-shift target.  Only hard-OFF days and CME days affect the target.
-          # If a person can't reach 6 due to too many VAC days, cleanup_pass will
-          # grant PTO credits to cover the shortfall.
           bt <- BASE_TARGETS[[person]]
           base_target <- if (is.null(bt)) {
             6L
@@ -45,28 +41,43 @@ compute_targets <- function(time_off) {
           } else {
             as.integer(bt)
           }
-          avail_for_target <- sum(!p_dates %in% unique(c(off_days, cme_days)))
-          base   <- min(base_target, avail_for_target + credited)
-          target <- if (avail_for_target >= base_target) base_target else base
-          sched_target <- max(0L, target - credited)
+          # ── Hard target = base − CME − PTO-reduction(requested time off) ──────
+          # The target is FIRM (no soft band).  Requested off+vac days in the PP
+          # lower the target by a fixed amount, and that SAME amount is the PTO the
+          # person needs (tracked for reporting, never scheduled):
+          #   off+vac in PP:  ≤4 → 0   5-6 → 1   7-8 → 2   9-10 → 3
+          #                   11 → 4   12 → 5    13-14 → 6
+          # (The stated ranges overlap at 10; resolved to 3 so the 5-6/7-8/9-10
+          #  pairs stay regular.)
+          n_requested_off <- length(off_days) + length(vac_days)
+          pto_needed <- if (n_requested_off >= 13L) 6L
+                        else if (n_requested_off == 12L) 5L
+                        else if (n_requested_off == 11L) 4L
+                        else if (n_requested_off >=  9L) 3L
+                        else if (n_requested_off >=  7L) 2L
+                        else if (n_requested_off >=  5L) 1L
+                        else 0L
 
-          # soft_min: scheduling urgency drops once this floor is reached.
-          # The person can still receive up to sched_target shifts; they are
-          # simply deprioritised relative to people below their own soft_min.
+          # base_target is 6 by default (BASE_TARGETS may override per person/PP).
+          # Clamp to available work days so the firm target is never unachievable.
+          target       <- max(0L, base_target - credited - pto_needed)
+          target       <- min(target, avail)
+          sched_target <- target
+
+          # Firm target → floor == ceiling.  FLEX staff (e.g. Todd) keep their own
+          # lower flexibility floor.
           flex_floor <- FLEX_TARGETS[[person]]
-          soft_min   <- if (!is.null(flex_floor)) {
-                          max(0L, min(as.integer(flex_floor), sched_target))
-                        } else {
-                          heavy_off <- (length(off_days) + length(vac_days)) >= 5L
-                          floor_val <- if (heavy_off) 4L else DEFAULT_SOFT_MIN
-                          max(0L, min(floor_val, sched_target))
-                        }
+          soft_min   <- if (!is.null(flex_floor))
+                          max(0L, min(as.integer(flex_floor), target))
+                        else
+                          target
 
           list(
             pp_name      = pp_name,
             avail        = avail,
             credited     = credited,
             target       = target,
+            pto_needed   = pto_needed,   # PTO needed this PP (tracked, NOT scheduled)
             sched_target = sched_target,
             soft_min     = soft_min,
             off_days     = off_days,
@@ -94,6 +105,7 @@ targets_summary_df <- function(targets) {
         avail        = info$avail,
         credited     = info$credited,
         target       = info$target,
+        pto_needed   = info$pto_needed,
         sched_target = info$sched_target,
         soft_min     = info$soft_min,
         stringsAsFactors = FALSE

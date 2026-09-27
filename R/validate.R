@@ -158,7 +158,7 @@ validate_schedule <- function(sched_obj, time_off, targets) {
     }
   }
 
-  # ── Soft: day-before-night flag ───────────────────────────────────────────
+  # ── Hard: day→night is absolutely not allowed (C8) ─────────────────────────
   for (d in dates[-length(dates)]) {
     d <- as_date(d)
     tomorrow_night <- get(d + 1L, "Night")
@@ -166,8 +166,8 @@ validate_schedule <- function(sched_obj, time_off, targets) {
       for (s in DAY_SLOTS) {
         v <- get(d, s)
         if (!is.na(v) && v == tomorrow_night) {
-          warnings <- c(warnings, sprintf(
-            "%s: %s works day on %s then night on %s (soft buffer violation)",
+          errors <- c(errors, sprintf(
+            "%s: %s works day on %s then night on %s (day→night not allowed)",
             tomorrow_night, s, as.character(d), as.character(d + 1L)))
         }
       }

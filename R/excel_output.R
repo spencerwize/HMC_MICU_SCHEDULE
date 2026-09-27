@@ -21,6 +21,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   C_YELLOW   <- "#FFF2CC"
   C_PEACH    <- "#FCE4D6"
   C_PINK     <- "#F4CCCC"
+  C_PTO      <- "#FF99CC"
   C_ORANGE   <- "#FF6D01"
   C_CREAM    <- "#FFFBF0"
   C_GRAY_LT  <- "#F2F2F2"
@@ -64,6 +65,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
                if (s == "APP1")  "APP1"   else
                if (s == "APP2")  "APP2"   else "APP 3")
     }
+    if (d %in% sched_obj$granted_pto[[person]]) return("PTO")
     pdata <- time_off[[person]]
     m     <- pdata[pdata$date == d, ]
     typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
@@ -79,7 +81,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
       Night = C_NIGHT,
-      CME  = C_ORANGE, OFF = C_PINK,
+      CME  = C_ORANGE, OFF = C_PINK, PTO = C_PTO,
       NULL)
   }
 
@@ -87,7 +89,7 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     switch(role,
       APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
       Night = F_NAVY,
-      CME = F_WHITE, OFF = F_RED,
+      CME = F_WHITE, OFF = F_RED, PTO = F_RED,
       "#000000")
   }
 
@@ -423,10 +425,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
       ppi    <- targets[[person]][[ppn]]
-      pp_row <- PAY_PERIODS[PAY_PERIODS$name == ppn, ]
-      vac_in_pp <- pdata$type == "vac" &
-        pdata$date >= pp_row$start & pdata$date <= pp_row$end
-      if (ppi$avail < 6L) n_pto <- n_pto + sum(vac_in_pp)
+      # PTO needed = the target reduction from requested time off (tracked, not
+      # scheduled); see compute_targets().
+      n_pto  <- n_pto + (if (is.null(ppi$pto_needed)) 0L else ppi$pto_needed)
       actual <- sched_obj$pp_counts[[person]][[ppn]]
       if (actual < ppi$sched_target)
         n_bump <- n_bump + (ppi$sched_target - actual)
@@ -601,7 +602,9 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Max Consecutive Nights",    "3"),
     list("Max Consecutive Work Days", "4"),
     list("PTO Logic",
-         "Vacation in a PP where available days < 6 counts as PTO (target-reducing)"))
+         paste("Requested off/vac days in a PP lower the target and that amount =",
+               "PTO needed (5-6→1, 7-8→2, 9-10→3, 11→4, 12→5, 13-14→6);",
+               "tracked, not scheduled")))
 
   for (rl in rules) {
     mergeCells(wb, "Summary", cols = 2:SUM_COLS, rows = srow)

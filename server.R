@@ -4,6 +4,11 @@
 
 server <- function(input, output, session) {
 
+  # ── Greedy warm-start cache (built once per time-off dataset) ──────────────
+  # The greedy seed only needs computing once; reuse it across Generate clicks
+  # and rebuild only when the underlying time-off data changes.
+  warm_cache <- list(time_off = NULL, ws = NULL)
+
   # ── Populate sheet dropdown on startup ────────────────────────────────────
   # Runs once; isolate() prevents googlesheets4 auth internals from creating
   # a reactive dependency that would re-trigger this observer later.
@@ -138,8 +143,24 @@ server <- function(input, output, session) {
           ps_list else NULL
       }
 
-      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule)
-      sched$run()
+      # Greedy warm start (built once, reused while the time-off data is unchanged).
+      warm_start <- NULL
+      if (isTRUE(input$use_warm_start)) {
+        if (is.null(warm_cache$ws) || !identical(warm_cache$time_off, time_off)) {
+          setProgress(0.3, detail = "Building greedy warm start (one-time)…")
+          greedy <- Scheduler$new(time_off, targets)
+          greedy$run()
+          warm_cache <<- list(time_off = time_off, ws = extract_warm_start(greedy))
+        }
+        warm_start <- warm_cache$ws
+      }
+
+      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule,
+                               warm_start = warm_start)
+      start_tier <- if (!is.null(input$start_tier) && nzchar(trimws(input$start_tier)))
+                      trimws(input$start_tier) else NULL
+      sched$run(run_faster = isTRUE(input$run_faster), start_tier = start_tier,
+                decompose  = isTRUE(input$decompose))
 
       setProgress(0.95, detail = "Validating…")
       validation <- validate_schedule(sched, time_off, targets)
@@ -328,7 +349,9 @@ server <- function(input, output, session) {
             break
           }
         }
-        if (role == "") {
+        if (role == "" && cur %in% p$sched$granted_pto[[person]]) {
+          role <- "PTO"
+        } else if (role == "") {
           pdata <- p$time_off[[person]]
           m     <- pdata[pdata$date == cur, ]
           typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
@@ -352,6 +375,7 @@ server <- function(input, output, session) {
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
+          PTO     = "#FF99CC",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
         )
         color <- if (role == "CME") "#FFFFFF" else "#000000"
@@ -419,8 +443,9 @@ server <- function(input, output, session) {
     role_colors <- c(
       APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
       Night   = "#BDD7EE",
-      CME  = "#FF6D01",
-      OFF  = "#FFC7CE"
+      CME     = "#FF6D01",
+      OFF     = "#FFC7CE",
+      PTO     = "#FF99CC"
     )
 
     wide <- grid %>%
@@ -621,6 +646,8 @@ server <- function(input, output, session) {
       })
     })) %>% bind_rows()
 
+    # PTO is no longer scheduled; pto_needed (from targets) is the amount each
+    # person needs this PP, tracked for reporting only.
     df <- left_join(tdf, actual_df, by = c("person", "pp")) %>%
       mutate(status = case_when(
         actual < soft_min     ~ "Below minimum",
@@ -638,6 +665,9 @@ server <- function(input, output, session) {
         target       = colDef(name = "Target",       width = 70),
         sched_target = colDef(name = "Sched Target", width = 100),
         soft_min     = colDef(name = "Min Floor",    width = 80),
+        pto_needed   = colDef(name = "PTO Needed",   width = 100,
+          cell   = function(v) if (!is.na(v) && v > 0L) as.character(v) else "—",
+          footer = function(values) sprintf("Total: %d", sum(values, na.rm = TRUE))),
         actual       = colDef(name = "Actual",       width = 70),
         status       = colDef(name = "Status",       width = 115,
           style = function(value) {
