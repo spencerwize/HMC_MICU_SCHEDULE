@@ -47,15 +47,24 @@ ui <- page_navbar(
           "Select the pay-period sheet from the Google Sheet."
         ),
         hr(),
-        checkboxInput("run_faster", "Fast mode (skip min-run tiers)", value = FALSE),
-        tags$small(class = "text-muted d-block mb-2",
-          "Skips the min-run-3 and min-run-2 tiers in each block. Faster but may produce more short runs."
-        ),
-        actionButton("run_btn", "Generate Schedule",
+        # Two explicit phases. Phase 1 places shifts only on requested-work
+        # ("green") days and leaves holes where too few people volunteered;
+        # phase 2 completes it, keeping as much of phase 1 as it can.
+        actionButton("run_btn", "1. Build green schedule",
           icon  = icon("play-circle"),
           class = "btn-primary w-100",
           width = "100%"
         ),
+        br(), br(),
+        actionButton("fill_btn", "2. Fill remainder (optional)",
+          icon  = icon("wand-magic-sparkles"),
+          class = "btn-outline-secondary w-100",
+          width = "100%"
+        ),
+        tags$small(class = "text-muted d-block mt-1",
+          "Phase 1 is the main output. Filling the remainder is still being ",
+          "tuned - it may keep fewer of the requested-work assignments than ",
+          "phase 1 shows."),
         br(), br(),
         conditionalPanel(
           "output.schedule_ready",
@@ -186,11 +195,16 @@ ui <- page_navbar(
           legend_chip("#92D050", "Day (APP1/APP2/APP3)"),
           legend_chip("#BDD7EE", "Night"),
           legend_chip("#FFFF99", "Holiday"),
-          legend_chip("#FFD966", "VAC"),
-          legend_chip("#FF99CC", "PTO"),
           legend_chip("#FF6D01", "CME / Conference"),
-          legend_chip("#FFC7CE", "Off"),
-          legend_chip("#F2F2F2", "Weekend (no shift)")
+          legend_chip("#FFC7CE", "OFF (marked Red)"),
+          legend_chip("#FF99CC", "PTO (requested)"),
+          legend_chip("#FFD966", "Yellow (avoid if possible)"),
+          legend_chip("#F2F2F2", "Weekend (no shift)"),
+          tags$span(class = "me-2",
+            tags$span(style = paste0(
+              "display:inline-block;width:12px;height:12px;vertical-align:middle;",
+              "border:2px solid #B8860B;margin-right:4px;")),
+            tags$small("Shift worked on a Yellow day"))
         )
       ),
       conditionalPanel(
@@ -222,7 +236,8 @@ ui <- page_navbar(
           inline   = FALSE
         ),
         hr(),
-        checkboxInput("grid_show_off", "Show OFF/VAC/CME rows",  value = TRUE),
+        checkboxInput("grid_show_off",   "Show OFF/VAC/CME rows",        value = TRUE),
+        checkboxInput("grid_show_green", "Show Yellow (avoid) days",     value = TRUE),
         checkboxInput("grid_compact",  "Compact (roles only)",   value = FALSE)
       ),
       conditionalPanel(

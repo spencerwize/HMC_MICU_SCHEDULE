@@ -16,7 +16,9 @@ server <- function(input, output, session) {
       TIMEOFF_SHEETS
     }))
     
-    sheet_names <- sheet_names[-which(sheet_names %in% c('Rules', 'rules'))]
+    # setdiff (not x[-which(...)]) — the latter empties the vector when no
+    # 'Rules' tab exists, because x[-integer(0)] selects nothing.
+    sheet_names <- setdiff(sheet_names, c("Rules", "rules"))
     
     # Omit `selected` so the user's current choice (or the ui.R default) is kept
     updateSelectInput(session, "sheet_select", choices = sheet_names)
@@ -87,80 +89,112 @@ server <- function(input, output, session) {
   # invalidation from googlesheets4 auth internals or any other side-effect.
   pipeline <- reactiveVal(NULL)
 
-  observeEvent(input$run_btn, {
-    shinyjs::disable("run_btn")
-    on.exit(shinyjs::enable("run_btn"), add = TRUE)
+  # Manual picks made in the holes worklist. Empty data.frame, same shape as
+  # pinned_df(), so it concatenates directly onto the green-only assignments.
+  manual_picks <- reactiveVal(
+    data.frame(person = character(), date = as.Date(character()),
+               slot = character(), stringsAsFactors = FALSE))
 
-    # Apply sheet-specific constants before any pipeline step so that
-    # SCHEDULE_START / SCHEDULE_END / PAY_PERIODS / HOLIDAYS reflect the
-    # currently selected sheet rather than the April–July defaults.
-    cfg <- SHEET_CONFIGS[[input$sheet_select]]
+  # ── Shared setup for both phases ──────────────────────────────────────────
+  # Applies the selected sheet's constants, parses time-off, computes targets
+  # and reads the prior-schedule grid. Used by the green-only phase; the fill
+  # phase reuses the scheduler object the green phase produced.
+  prepare_inputs <- function(sheet_key) {
+    cfg <- SHEET_CONFIGS[[sheet_key]]
     if (!is.null(cfg)) {
       SCHEDULE_START <<- cfg$schedule_start
       SCHEDULE_END   <<- cfg$schedule_end
       PAY_PERIODS    <<- cfg$pay_periods
       HOLIDAYS       <<- cfg$holidays
-      # holiday_dates may be explicitly narrower than names(HOLIDAYS) when
-      # some entries are pre-seeded weekend shifts that shouldn't be highlighted
       HOLIDAY_DATES  <<- if (!is.null(cfg$holiday_dates)) cfg$holiday_dates
                          else as.Date(names(cfg$holidays))
       HOLIDAY_NAMES  <<- cfg$holiday_names
     }
+    selected_sheet <- if (nzchar(sheet_key)) sheet_key else NULL
+    time_off <- parse_time_off(TIMEOFF_GSHEET_URL, sheet = selected_sheet)
+    targets  <- compute_targets(time_off)
+    green_supply_report(time_off, targets)
 
-    withProgress(message = "Building schedule…", value = 0, {
-      setProgress(0.1, detail = "Parsing time-off data…")
-      selected_sheet <- if (nzchar(input$sheet_select)) input$sheet_select else NULL
-      time_off <- parse_time_off(TIMEOFF_GSHEET_URL, sheet = selected_sheet)
+    ps_start    <- if (!is.null(cfg)) cfg$schedule_start else SCHEDULE_START
+    prior_dates <- seq(ps_start - 7L, ps_start - 1L, by = "day")
+    make_id     <- function(person, d)
+      sprintf("prior_%s_%s", gsub("[^A-Za-z0-9]", "_", person), format(d, "%Y%m%d"))
+    ps_list <- setNames(lapply(STAFF, function(person) {
+      rows <- Filter(Negate(is.null), lapply(prior_dates, function(d) {
+        val <- input[[make_id(person, d)]]
+        if (!is.null(val) && nzchar(val))
+          data.frame(date = d, type = val, stringsAsFactors = FALSE)
+      }))
+      if (length(rows) > 0L) do.call(rbind, rows) else NULL
+    }), STAFF)
+    prior_schedule <- if (any(vapply(ps_list, function(df) !is.null(df), logical(1L))))
+      ps_list else NULL
 
-      setProgress(0.25, detail = "Computing targets…")
-      targets <- compute_targets(time_off)
+    list(time_off = time_off, targets = targets, prior_schedule = prior_schedule)
+  }
 
-      setProgress(0.35, detail = "Building and solving schedule (ILP)…")
+  # Package a solved scheduler into the reactive the rest of the UI reads.
+  store_result <- function(sched, time_off, targets, phase) {
+    validation <- validate_schedule(sched, time_off, targets, partial = (phase == 1L))
+    updatePickerInput(session, "cal_person", choices = STAFF, selected = STAFF[1])
+    pipeline(list(
+      sched      = sched,
+      time_off   = time_off,
+      targets    = targets,
+      validation = validation,
+      tier_used  = sched$tier_used,
+      phase      = phase,
+      holes      = sched$holes_df(),
+      green      = green_summary(sched, time_off, targets, quiet = TRUE),
+      pins_kept  = sched$pins_kept,
+      df         = sched$to_dataframe(),
+      grid       = sched$to_person_grid(time_off, targets)
+    ))
+  }
 
-      # Parse prior-schedule grid inputs into named list: person -> data.frame(date,type)
-      {
-        cfg_ps      <- SHEET_CONFIGS[[input$sheet_select]]
-        ps_start    <- if (!is.null(cfg_ps)) cfg_ps$schedule_start else SCHEDULE_START
-        prior_dates <- seq(ps_start - 7L, ps_start - 1L, by = "day")
-        make_id     <- function(person, d)
-          sprintf("prior_%s_%s", gsub("[^A-Za-z0-9]", "_", person), format(d, "%Y%m%d"))
+  # ── Phase 1: build the green-only schedule ────────────────────────────────
+  observeEvent(input$run_btn, {
+    shinyjs::disable("run_btn"); shinyjs::disable("fill_btn")
+    on.exit({ shinyjs::enable("run_btn"); shinyjs::enable("fill_btn") }, add = TRUE)
 
-        ps_list <- setNames(lapply(STAFF, function(person) {
-          rows <- Filter(Negate(is.null), lapply(prior_dates, function(d) {
-            val <- input[[make_id(person, d)]]
-            if (!is.null(val) && nzchar(val))
-              data.frame(date = d, type = val, stringsAsFactors = FALSE)
-          }))
-          if (length(rows) > 0L) do.call(rbind, rows) else NULL
-        }), STAFF)
+    withProgress(message = "Building the green-only schedule…", value = 0, {
+      setProgress(0.1, detail = "Parsing requests…")
+      inp <- prepare_inputs(input$sheet_select)
 
-        prior_schedule <- if (any(vapply(ps_list, function(df) !is.null(df), logical(1L))))
-          ps_list else NULL
-      }
-
-      sched <- SchedulerLP$new(time_off, targets, prior_schedule = prior_schedule)
-      sched$run(run_faster = isTRUE(input$run_faster))
+      setProgress(0.35, detail = "Solving on requested-work days only…")
+      sched <- SchedulerLP$new(inp$time_off, inp$targets,
+                               prior_schedule = inp$prior_schedule)
+      sched$run_green()
 
       setProgress(0.95, detail = "Validating…")
-      validation <- validate_schedule(sched, time_off, targets)
-
+      store_result(sched, inp$time_off, inp$targets, phase = 1L)
       setProgress(1.0, detail = "Done.")
+    })
+  })
 
-      # Refresh the cal_person picker to match whoever is in the sheet
-      updatePickerInput(session, "cal_person",
-        choices  = STAFF,
-        selected = STAFF[1]
-      )
+  # ── Phase 2: fill the remainder ───────────────────────────────────────────
+  observeEvent(input$fill_btn, {
+    p <- pipeline()
+    if (is.null(p) || is.null(p$sched)) {
+      showNotification("Build the green schedule first.", type = "warning")
+      return(invisible(NULL))
+    }
+    shinyjs::disable("run_btn"); shinyjs::disable("fill_btn")
+    on.exit({ shinyjs::enable("run_btn"); shinyjs::enable("fill_btn") }, add = TRUE)
 
-      pipeline(list(
-        sched      = sched,
-        time_off   = time_off,
-        targets    = targets,
-        validation = validation,
-        tier_used  = sched$tier_used,
-        df         = sched$to_dataframe(),
-        grid       = sched$to_person_grid(time_off, targets)
-      ))
+    withProgress(message = "Filling the remainder…", value = 0, {
+      setProgress(0.2, detail = "Holding the requested-work assignments…")
+      sched <- p$sched
+      # Any manual worklist picks are held alongside the green-only assignments.
+      pins <- rbind(sched$pinned_df(), manual_picks())
+      pins <- pins[!duplicated(paste(pins$person, pins$date, pins$slot)), , drop = FALSE]
+
+      setProgress(0.4, detail = "Solving…")
+      sched$run_fill(pinned = pins)
+
+      setProgress(0.95, detail = "Validating…")
+      store_result(sched, p$time_off, p$targets, phase = 2L)
+      setProgress(1.0, detail = "Done.")
     })
   })
 
@@ -218,11 +252,14 @@ server <- function(input, output, session) {
     req(pipeline())
     p      <- pipeline()
     all_d  <- as.Date(p$sched$dates, origin = "1970-01-01")
-    wknd_d <- all_d[weekdays(all_d) %in% c("Saturday", "Sunday")]
+    # Weekend = Friday night through Sunday night (is_weekend_shift), matching
+    # the ILP. Night shifts live in person_nights, not person_shifts.
     ct <- vapply(STAFF, function(x) {
-      sh <- p$sched$person_shifts[[x]]
-      if (nrow(sh) == 0L) return(0L)
-      as.integer(sum(sh$date %in% wknd_d))
+      sh  <- p$sched$person_shifts[[x]]
+      nts <- p$sched$person_nights[[x]]
+      as.integer(
+        (if (nrow(sh)) sum(is_weekend_shift(sh$date, sh$slot)) else 0L) +
+        (if (length(nts)) sum(is_weekend_shift(nts, "Night"))  else 0L))
     }, integer(1L))
     mx <- max(ct); mn <- min(ct)
     mxp <- STAFF[which.max(ct)]; mnp <- STAFF[which.min(ct)]
@@ -309,7 +346,6 @@ server <- function(input, output, session) {
     idx  <- start_dow + 1L
     cur  <- first_d
     while (cur <= last_d) {
-      ds      <- as.character(cur)
       in_sched <- (cur >= SCHEDULE_START && cur <= SCHEDULE_END)
 
       role  <- ""
@@ -317,49 +353,36 @@ server <- function(input, output, session) {
       color <- "#000"
 
       if (in_sched) {
-        # Look up role
-        day_s <- p$sched$schedule[[ds]]
-        for (s in SLOTS) {
-          v <- day_s[[s]]
-          if (!is.na(v) && v == person) {
-            role <- if (s == "Night") "Night" else
-                    if (s == "APP1")  "APP1"  else
-                    if (s == "APP2")  "APP2"  else "APP 3"
-            break
-          }
-        }
-        if (role == "" && cur %in% p$sched$granted_pto[[person]]) {
-          role <- "PTO"
-        } else if (role == "") {
-          pdata <- p$time_off[[person]]
-          m     <- pdata[pdata$date == cur, ]
-          typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
-          if (!is.na(typ)) {
-            pp_now  <- get_pp(cur)
-            pp_info <- p$targets[[person]][[pp_now]]
-            role <- switch(typ,
-              cme = "CME",
-              off = "OFF",
-              vac = "OFF",
-              ""
-            )
-          }
-        }
+        # Role logic lives in R/roles.R — shared with the Schedule Grid and
+        # the Excel export so the three views cannot drift apart again.
+        role <- role_of(person, cur, p$sched$schedule, p$time_off,
+                        p$sched$granted_pto)
 
         is_hol <- cur %in% HOLIDAY_DATES
         bg <- switch(role,
-          APP1    = if (is_hol) "#FFFF99" else "#92D050",
-          APP2    = if (is_hol) "#FFFF99" else "#92D050",
-          "APP 3" = if (is_hol) "#FFFF99" else "#92D050",
+          Day     = if (is_hol) "#FFFF99" else "#92D050",
           Night   = if (is_hol) "#FFFF99" else "#BDD7EE",
           CME     = "#FF6D01",
           OFF     = "#FFC7CE",
           PTO     = "#FF99CC",
+          Yellow  = "#FFD966",
           if (is_weekend(cur)) "#F2F2F2" else "#FFFFFF"
         )
         color <- if (role == "CME") "#FFFFFF" else "#000000"
+        # A requested-work day is marked with an OUTLINE, not a fill: the fill is
+        # already carrying the role, and #92D050/#FFFF99 are taken by day-shift
+        # and holiday. Solid when the request was granted, dashed when it was not.
+        # Outline ONLY a shift worked on a day the person marked Yellow. Green is
+        # the default state for most days now (blank counts as Green), so
+        # outlining every green shift would mark nearly the whole calendar; a
+        # shift landing on a Yellow day is the exception worth flagging.
+        worked <- role %in% WORK_ROLES
+        border <- if (worked && !is_green_day(person, cur, p$time_off))
+                    "2px solid #B8860B"
+                  else "1px solid #ddd"
       } else {
         bg <- "#EEEEEE"
+        border <- "1px solid #ddd"
       }
 
       day_num <- as.integer(format(cur, "%d"))
@@ -370,8 +393,8 @@ server <- function(input, output, session) {
       grid_cells[[idx]] <- tags$td(
         style = sprintf(
           "background:%s; color:%s; padding:6px 4px; text-align:center;
-           border:1px solid #ddd; min-width:60px; height:56px;
-           vertical-align:top; font-size:13px;", bg, color),
+           border:%s; min-width:60px; height:56px;
+           vertical-align:top; font-size:13px;", bg, color, border),
         tags$div(style = "font-weight:600;", day_num),
         role_lbl
       )
@@ -420,19 +443,25 @@ server <- function(input, output, session) {
 
     # Pivot wide: date x person
     role_colors <- c(
-      APP1    = "#92D050", APP2 = "#92D050", "APP 3" = "#92D050",
+      Day     = "#92D050",
       Night   = "#BDD7EE",
       CME     = "#FF6D01",
       OFF     = "#FFC7CE",
-      PTO     = "#FF99CC"
+      PTO     = "#FF99CC",
+      Yellow  = "#FFD966"      # marked "avoid if possible"
     )
 
+    # `wants` rides alongside `role` so a WORKED green day can keep its role fill
+    # and still be outlined. Encoded into the cell value as a trailing marker,
+    # then stripped for display — reactable colDefs see one value per cell.
+    grid$role_mark <- ifelse(grid$wants & nzchar(grid$role),
+                             paste0(grid$role, "*"), grid$role)
     wide <- grid %>%
-      select(date, day_name, pp, person, role, is_holiday, is_weekend) %>%
+      select(date, day_name, pp, person, role_mark, is_holiday, is_weekend) %>%
       tidyr::pivot_wider(
         id_cols     = c(date, day_name, pp, is_holiday, is_weekend),
         names_from  = person,
-        values_from = role
+        values_from = role_mark
       ) %>%
       arrange(date)
 
@@ -440,11 +469,15 @@ server <- function(input, output, session) {
     staff_present <- STAFF[STAFF %in% names(wide)]
     wide$app3_open <- apply(
       wide[, staff_present, drop = FALSE], 1,
-      function(row) !any(row == "APP 3", na.rm = TRUE)
+      function(row) sum(sub("[*]$", "", row) == "Day", na.rm = TRUE) < 3L
     )
 
     # Make cell colour helper
-    show_off <- isTRUE(input$grid_show_off)
+    show_off   <- isTRUE(input$grid_show_off)
+    show_green <- isTRUE(input$grid_show_green)
+    # "APP1*" -> role "APP1" plus a requested-work marker.
+    base_role  <- function(v) sub("[*]$", "", v)
+    is_wanted  <- function(v) grepl("[*]$", v)
     make_col <- function(person_name) {
       colDef(
         name   = person_name,
@@ -452,17 +485,28 @@ server <- function(input, output, session) {
         style  = function(value) {
           if (is.null(value) || is.na(value) || !nzchar(value))
             return(list(background = "#FAFAFA"))
-          if (!show_off && value %in% c("OFF", "VAC", "CME"))
+          r <- base_role(value); w <- is_wanted(value)
+          if (!show_off   && r %in% c("OFF", "VAC", "CME"))
             return(list(background = "#FAFAFA"))
-          bg <- role_colors[value]
+          if (!show_green && r == "Yellow")
+            return(list(background = "#FAFAFA"))
+          bg <- role_colors[r]
           if (is.na(bg)) bg <- "#FAFAFA"
-          list(background = bg, fontWeight = "bold",
-               fontSize = "11px", textAlign = "center")
+          st <- list(background = bg, fontWeight = "bold",
+                     fontSize = "11px", textAlign = "center")
+          # Outline ONLY a shift worked on a Yellow day - the exception worth
+          # seeing. Green is now the default state for most days, so outlining
+          # every green shift would mark almost the whole grid.
+          if (!w && r %in% WORK_ROLES)
+            st$boxShadow <- "inset 0 0 0 2px #B8860B"
+          st
         },
         cell   = function(value) {
           if (is.null(value) || is.na(value)) return("")
-          if (!show_off && value %in% c("OFF", "VAC", "CME")) return("")
-          value
+          r <- base_role(value)
+          if (!show_off   && r %in% c("OFF", "VAC", "CME")) return("")
+          if (!show_green && r == "Yellow") return("")
+          r
         }
       )
     }
@@ -578,13 +622,13 @@ server <- function(input, output, session) {
     req(pipeline())
     p         <- pipeline()
     all_dates <- as.Date(p$sched$dates, origin = "1970-01-01")
-    wknd_dates <- all_dates[weekdays(all_dates) %in% c("Saturday", "Sunday")]
     df <- data.frame(
       person  = STAFF,
       weekend = sapply(STAFF, function(x) {
-        sh <- p$sched$person_shifts[[x]]
-        if (nrow(sh) == 0L) return(0L)
-        sum(sh$date %in% wknd_dates)
+        sh  <- p$sched$person_shifts[[x]]
+        nts <- p$sched$person_nights[[x]]
+        (if (nrow(sh)) sum(is_weekend_shift(sh$date, sh$slot)) else 0L) +
+        (if (length(nts)) sum(is_weekend_shift(nts, "Night"))  else 0L)
       }),
       stringsAsFactors = FALSE
     )

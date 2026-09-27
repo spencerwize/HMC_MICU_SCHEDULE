@@ -8,14 +8,90 @@
 
 build_excel <- function(sched_obj, time_off, targets, output_path) {
 
+  # ── Adopt the schedule frame carried by the ARGUMENTS ─────────────────────
+  # STAFF / PAY_PERIODS / SCHEDULE_START / SCHEDULE_END are mutable globals that
+  # run_pipeline() rewrites per sheet, and re-sourcing global.R resets them to
+  # the constants.R defaults. Either leaves an existing `res` mismatched against
+  # them, which used to fail deep inside a vapply ("result is length 0") or, in
+  # older code, quietly render the wrong pay periods.
+  #
+  # Everything needed is already carried by the arguments, so derive the frame
+  # from them. The globals are set (not merely shadowed) because helpers defined
+  # in constants.R - get_pp(), get_pp_vec(), is_weekend_shift() - read the global
+  # PAY_PERIODS, and are called from here. They are restored on exit, so calling
+  # build_excel() has no lasting effect on the session.
+  .saved <- list(STAFF = STAFF, PAY_PERIODS = PAY_PERIODS,
+                 SCHEDULE_START = SCHEDULE_START, SCHEDULE_END = SCHEDULE_END)
+  on.exit({
+    STAFF          <<- .saved$STAFF
+    PAY_PERIODS    <<- .saved$PAY_PERIODS
+    SCHEDULE_START <<- .saved$SCHEDULE_START
+    SCHEDULE_END   <<- .saved$SCHEDULE_END
+  }, add = TRUE)
+
+  if (!length(targets) || !length(sched_obj$dates))
+    stop("build_excel(): `targets` or `sched_obj$dates` is empty - nothing to render.")
+
+  STAFF          <<- names(targets)
+  SCHEDULE_START <<- min(sched_obj$dates)
+  SCHEDULE_END   <<- max(sched_obj$dates)
+  PAY_PERIODS    <<- local({
+    pps <- names(targets[[STAFF[1L]]])
+    do.call(rbind, lapply(pps, function(pp) {
+      pd <- targets[[STAFF[1L]]][[pp]]$pp_dates
+      if (is.null(pd) || !length(pd))
+        stop("build_excel(): targets for pay period '", pp, "' carry no pp_dates.")
+      data.frame(name = pp, start = min(pd), end = max(pd), stringsAsFactors = FALSE)
+    }))
+  })
+
+  # ── Staff who exist in the workbook but not in the solve ──────────────────
+  # PENDING_STAFF (new hires) get columns, Summary rows and dropdown entries so
+  # they can be assigned by hand. They carry no request-sheet data and no solver
+  # output, so synthesise empty records for them here. `targets` and `time_off`
+  # are local copies, and the per-person scheduler lookups are read through
+  # accessors below rather than mutated - sched_obj is an R6 reference object and
+  # writing to it would leak back into the caller's result.
+  pending <- setdiff(if (exists("PENDING_STAFF")) PENDING_STAFF else character(0), STAFF)
+  if (length(pending)) {
+    zero_pp <- setNames(lapply(PAY_PERIODS$name, function(pp) {
+      i <- match(pp, PAY_PERIODS$name)
+      list(pp_name = pp, avail = 0L, credited = 0L, target = 0L,
+           sched_target = 0L, pto_needed = 0L, pto_auto = 0L, soft_min = 0L,
+           off_days = as.Date(character()), vac_days = as.Date(character()),
+           cme_days = as.Date(character()), pto_days = as.Date(character()),
+           green_days = as.Date(character()),
+           pp_dates = seq(PAY_PERIODS$start[i], PAY_PERIODS$end[i], by = "day"))
+    }), PAY_PERIODS$name)
+    for (pp_new in pending) {
+      targets[[pp_new]]  <- zero_pp
+      time_off[[pp_new]] <- data.frame(date = as.Date(character()),
+                                       type = character(), stringsAsFactors = FALSE)
+    }
+    STAFF <<- c(STAFF, pending)
+    message(sprintf("  Including %d pending staff (no solver data): %s",
+                    length(pending), paste(pending, collapse = ", ")))
+  }
+  # Scheduler lookups that must tolerate a person the solver never saw.
+  ps_shifts <- function(p) { v <- sched_obj$person_shifts[[p]]
+    if (is.null(v)) data.frame(date = as.Date(character()), slot = character(),
+                               stringsAsFactors = FALSE) else v }
+  ps_nights <- function(p) { v <- sched_obj$person_nights[[p]]
+    if (is.null(v)) as.Date(character()) else v }
+  ps_ppcount <- function(p, pp) { v <- sched_obj$pp_counts[[p]]
+    if (is.null(v) || is.null(v[[pp]])) 0L else as.integer(v[[pp]]) }
+
   wb    <- createWorkbook()
   all_d <- sched_obj$dates
+
 
   # ── Color palette ──────────────────────────────────────────────────────────
   C_NAVY     <- "#1F3864"
   C_BLUE     <- "#2E75B6"
   C_BLUE_LT  <- "#D6E4F3"
   C_NIGHT    <- "#D6E4F0"
+  C_FC3      <- "#E4DFEC"   # FC3 service - distinct from MICU day/night
+  F_FC3      <- "#5B3A8E"
   C_LAVENDER <- "#EEF1FF"
   C_GREEN    <- "#E2EFDA"
   C_YELLOW   <- "#FFF2CC"
@@ -55,49 +131,34 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   }
 
   # ── Role helpers ───────────────────────────────────────────────────────────
-  person_role <- function(person, d) {
-    ds    <- as.character(d)
-    day_s <- sched_obj$schedule[[ds]]
-    for (s in SLOTS) {
-      v <- day_s[[s]]
-      if (!is.na(v) && v == person)
-        return(if (s == "Night")  "Night" else
-               if (s == "APP1")  "APP1"   else
-               if (s == "APP2")  "APP2"   else "APP 3")
-    }
-    if (d %in% sched_obj$granted_pto[[person]]) return("PTO")
-    pdata <- time_off[[person]]
-    m     <- pdata[pdata$date == d, ]
-    typ   <- if (nrow(m) > 0) m$type[1] else NA_character_
-    if (!is.na(typ)) {
-      return(switch(typ, cme = "CME", off = "OFF", vac = "OFF", ""))
-    }
-    ""
-  }
+  # Delegates to role_of() in R/roles.R — shared with the Schedule Grid and
+  # the Calendar tab so the three views cannot drift apart again.
+  person_role <- function(person, d)
+    role_of(person, d, sched_obj$schedule, time_off, sched_obj$granted_pto)
 
   role_bg <- function(role, is_holiday = FALSE) {
-    if (is_holiday && role %in% c("APP1","APP2","APP 3","Night"))
+    if (is_holiday && role %in% c("Day","Night"))
       return(C_YELLOW)
     switch(role,
-      APP1 = C_GREEN, APP2 = C_GREEN, "APP 3" = C_GREEN,
+      Day = C_GREEN,
       Night = C_NIGHT,
       CME  = C_ORANGE, OFF = C_PINK, PTO = C_PTO,
+      # "Yellow" = the person asked to avoid this day. Pale amber fill so it
+      # reads as a soft flag, clearly distinct from OFF (pink) and from a
+      # blank Green day, which carries no fill at all.
+      Yellow = C_PEACH,
       NULL)
   }
 
   role_fc <- function(role) {
     switch(role,
-      APP1 = F_BLUE, APP2 = F_BLUE, "APP 3" = F_BLUE,
+      Day = F_BLUE,
       Night = F_NAVY,
       CME = F_WHITE, OFF = F_RED, PTO = F_RED,
+      Yellow = "#8A6D00",                    # dark amber on the peach fill
       "#000000")
   }
 
-  # Precompute role lookup
-  role_lookup <- setNames(
-    lapply(all_d, function(d)
-      setNames(sapply(STAFF, function(p) person_role(p, d)), STAFF)),
-    as.character(all_d))
 
   # ── Day-before-night violation set ─────────────────────────────────────────
   dbn_set <- list()
@@ -111,20 +172,21 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
         dbn_set[[length(dbn_set) + 1L]] <- list(date = d, person = night_p)
     }
   }
-  is_dbn <- function(d, person)
-    any(vapply(dbn_set, function(x) x$date == d && x$person == person, logical(1L)))
-
   N_STAFF <- length(STAFF)
-  N_HDR   <- 7L
+  # ── Schedule sheet column layout (single source of truth) ─────────────────
+  #   A Date | B Day | C PP | D E F  MICU day | G MICU night | H I J  FC3 |
+  #   [staff...] | _key_
+  MICU_COL_FIRST <- 4L
+  MICU_COL_LAST  <- 7L                      # D-G
+  FC3_COL_FIRST  <- 8L
+  FC3_COL_LAST   <- 10L                     # H-J
+  N_HDR   <- FC3_COL_LAST                   # header cols before the staff block
   N_PP    <- nrow(PAY_PERIODS)
 
   # ── Pre-compute Schedule row numbers (for Calendar formulas) ───────────────
-  # HOLIDAY_NAMES comes from the global set by server.R when the sheet config
-  # is applied — no hardcoding needed here.
-
   sched_row_map <- local({
     rm   <- list()
-    cr   <- 2L   # row 1 = col header; row 2 = first PP header
+    cr   <- 3L   # rows 1-2 = group banner + col header; row 3 = first PP header
     prev <- ""
     for (d_raw in all_d) {
       d  <- as.Date(d_raw, origin = "1970-01-01")
@@ -135,6 +197,11 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     }
     rm
   })
+
+  # The Schedule sheet carries a group banner on row 1 (MICU / FC3) and the real
+  # column headers on row 2, so every MATCH against the staff-name header row
+  # must target row 2.
+  SCHED_HDR_ROW <- 2L
 
   # Calendar formula helpers — column range is derived from N_STAFF so that
   # adding/removing staff doesn't break the formulas.
@@ -157,13 +224,13 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # Single row per day — formulas reference just one row in the Schedule sheet.
   cal_role_formula <- function(row) {
     D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, row, E_LTR, row)
-    M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
+    M <- sprintf("MATCH($C$2,Schedule!$%s$2:$%s$2,0)", S_LTR, E_LTR)
     sprintf('IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),""),"")', D,M,D,M)
   }
 
   cal_hol_formula <- function(row, hol_name) {
     D <- sprintf("Schedule!$%s$%d:$%s$%d", S_LTR, row, E_LTR, row)
-    M <- sprintf("MATCH($C$2,Schedule!$%s$1:$%s$1,0)", S_LTR, E_LTR)
+    M <- sprintf("MATCH($C$2,Schedule!$%s$2:$%s$2,0)", S_LTR, E_LTR)
     sprintf('"%s  "&IFERROR(IF(INDEX(%s,1,%s)<>"",INDEX(%s,1,%s),""),"")',
       hol_name, D,M,D,M)
   }
@@ -223,7 +290,135 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   })
   dow_lbl <- c("Sun","Mon","Tue","Wed","Thu","Fri","Sat")
 
+  # ── "Remaining to fill" block ───────────────────────────────────────────────
+  # Per pay period, for whoever is selected in the C2 dropdown: how many shifts
+  # they are still short of their target. Entirely formula-driven, so it updates
+  # with the dropdown like the calendar below it.
+  #
+  # Target lookup uses an inline array constant per pay period ({6,5,6,...}, one
+  # entry per staff member in STAFF order) indexed by the same MATCH the calendar
+  # formulas use. That keeps the block self-contained - no helper cells to hide,
+  # and nothing to break if rows shift.
   cal_row <- 4L
+  rem_first_row <- cal_row + 2L
+  mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
+  writeData(wb, "Calendar", x = "REMAINING TO FILL (this person, by pay period)",
+    startRow = cal_row, startCol = 2, colNames = FALSE)
+  addStyle(wb, "Calendar",
+    mk(fg = C_BLUE, bold = TRUE, size = 11, font_color = F_WHITE),
+    rows = cal_row, cols = 2:8)
+  setRowHeights(wb, "Calendar", rows = cal_row, heights = 19.5)
+  cal_row <- cal_row + 1L
+
+  rem_hdr <- c("Pay period", "Dates", "Target", "Scheduled", "Remaining",
+               "CME", "PTO")
+  for (ci in seq_along(rem_hdr)) {
+    writeData(wb, "Calendar", x = rem_hdr[ci],
+      startRow = cal_row, startCol = ci + 1L, colNames = FALSE)
+    addStyle(wb, "Calendar",
+      mk(fg = C_GRAY_LT, bold = TRUE, size = 9, halign = "center",
+         border = "All", border_color = "#BFBFBF"),
+      rows = cal_row, cols = ci + 1L)
+  }
+  cal_row <- cal_row + 1L
+
+  MATCH_P <- sprintf("MATCH($C$2,Schedule!$%s$2:$%s$2,0)", S_LTR, E_LTR)
+  SCOL    <- sprintf("Schedule!$%s$1:$%s$%d", S_LTR, E_LTR, MAX_SCHED_ROW)
+
+  for (ppi in seq_len(nrow(PAY_PERIODS))) {
+    pp_name <- PAY_PERIODS$name[ppi]
+    pdates  <- seq(PAY_PERIODS$start[ppi], PAY_PERIODS$end[ppi], by = "day")
+    pdates  <- pdates[pdates >= SCHEDULE_START & pdates <= SCHEDULE_END]
+    if (!length(pdates)) next
+    rws <- unlist(sched_row_map[as.character(pdates)])
+    r1  <- min(rws); r2 <- max(rws)
+
+    # Per-person target for this PP, in STAFF order, as an Excel array constant.
+    # CME comes from the request sheet and is fixed, so it rides as an array
+    # constant. PTO is LIVE - see below - because granting a PTO day on the
+    # Schedule sheet has to move these numbers.
+    cme_vec <- vapply(STAFF, function(p)
+      as.numeric(length(targets[[p]][[pp_name]]$cme_days)), numeric(1L))
+    # The automatic pto_reduction() figure acts as a floor under the typed count.
+    pto_auto_vec <- vapply(STAFF, function(p)
+      as.numeric(targets[[p]][[pp_name]]$pto_auto), numeric(1L))
+    # BASE target (normally 6). The live target is base - CME - PTO, so granting
+    # PTO lowers the shifts owed rather than leaving a stale number here.
+    base_vec <- vapply(STAFF, function(p) {
+      ti <- targets[[p]][[pp_name]]
+      as.numeric(ti$sched_target + ti$credited + ti$pto_needed)
+    }, numeric(1L))
+    cme_arr  <- paste0("{", paste(cme_vec,      collapse = ","), "}")
+    ptoa_arr <- paste0("{", paste(pto_auto_vec, collapse = ","), "}")
+    base_arr <- paste0("{", paste(base_vec,     collapse = ","), "}")
+
+    rng   <- sprintf("INDEX(%s,%d,%s):INDEX(%s,%d,%s)", SCOL, r1, MATCH_P, SCOL, r2, MATCH_P)
+    # A "scheduled" cell is one holding a work role; OFF / CME / Yellow / blank are not.
+    # FC3 counts as a worked shift, so it belongs in the pay-period total here
+    # exactly as it does in the Summary.
+    cnt   <- sprintf(
+      'COUNTIF(%s,"Day")+COUNTIF(%s,"Night")+COUNTIF(%s,"FC3")+COUNTIF(%s,"FC3 Night")',
+      rng, rng, rng, rng)
+    # PTO actually granted this period: days typed "PTO" in the person's column,
+    # floored at the automatic figure.
+    f_pto <- sprintf('IFERROR(MAX(COUNTIF(%s,"PTO"),INDEX(%s,1,%s)),0)',
+                     rng, ptoa_arr, MATCH_P)
+    f_cme <- sprintf("IFERROR(INDEX(%s,1,%s),0)", cme_arr, MATCH_P)
+    # Shifts owed = base - CME - PTO, so an extra PTO day lowers the target.
+    f_tgt <- sprintf("MAX(0,IFERROR(INDEX(%s,1,%s),0)-%s-%s)",
+                     base_arr, MATCH_P, f_cme, f_pto)
+    f_cnt <- sprintf("IFERROR(%s,0)", cnt)
+    f_rem <- sprintf("MAX(0,%s-%s)", f_tgt, f_cnt)
+
+    writeData(wb, "Calendar", x = pp_name, startRow = cal_row, startCol = 2, colNames = FALSE)
+    writeData(wb, "Calendar",
+      x = sprintf("%s \u2013 %s", format(min(pdates), "%b %d"), format(max(pdates), "%b %d")),
+      startRow = cal_row, startCol = 3, colNames = FALSE)
+    writeFormula(wb, "Calendar", x = f_tgt, startRow = cal_row, startCol = 4)
+    writeFormula(wb, "Calendar", x = f_cnt, startRow = cal_row, startCol = 5)
+    writeFormula(wb, "Calendar", x = f_rem, startRow = cal_row, startCol = 6)
+    writeFormula(wb, "Calendar", x = f_cme, startRow = cal_row, startCol = 7)
+    writeFormula(wb, "Calendar", x = f_pto, startRow = cal_row, startCol = 8)
+
+    addStyle(wb, "Calendar", mk(bold = TRUE, size = 10, halign = "left",
+      border = "All", border_color = "#D0D0D0"), rows = cal_row, cols = 2)
+    addStyle(wb, "Calendar", mk(size = 9, font_color = "#666666", halign = "left",
+      border = "All", border_color = "#D0D0D0"), rows = cal_row, cols = 3)
+    for (cc in 4:5)
+      addStyle(wb, "Calendar", mk(size = 10, halign = "center",
+        border = "All", border_color = "#D0D0D0"), rows = cal_row, cols = cc)
+    addStyle(wb, "Calendar", mk(bold = TRUE, size = 10, halign = "center",
+      border = "All", border_color = "#D0D0D0"), rows = cal_row, cols = 6)
+    addStyle(wb, "Calendar", mk(fg = C_ORANGE, size = 10, halign = "center",
+      font_color = F_WHITE, border = "All", border_color = "#D0D0D0"),
+      rows = cal_row, cols = 7)
+    addStyle(wb, "Calendar", mk(fg = C_PEACH, size = 10, halign = "center",
+      font_color = F_BROWN, border = "All", border_color = "#D0D0D0"),
+      rows = cal_row, cols = 8)
+    cal_row <- cal_row + 1L
+  }
+
+  # Totals row
+  rem_last_row <- cal_row - 1L
+  writeData(wb, "Calendar", x = "TOTAL", startRow = cal_row, startCol = 2, colNames = FALSE)
+  for (cc in 4:8)
+    writeFormula(wb, "Calendar",
+      x = sprintf("SUM(%s%d:%s%d)", LETTERS[cc], rem_first_row, LETTERS[cc], rem_last_row),
+      startRow = cal_row, startCol = cc)
+  for (cc in 2:8)
+    addStyle(wb, "Calendar",
+      mk(fg = C_GRAY_LT, bold = TRUE, size = 10,
+         halign = if (cc <= 3) "left" else "center",
+         border = "All", border_color = "#BFBFBF"),
+      rows = cal_row, cols = cc)
+  # Highlight any pay period still short.
+  conditionalFormatting(wb, "Calendar",
+    cols = 6, rows = rem_first_row:rem_last_row,
+    rule = ">0", style = mk(fg = C_PINK, bold = TRUE, font_color = F_RED,
+                            halign = "center", border = "All",
+                            border_color = "#D0D0D0"))
+  cal_row <- cal_row + 2L
+  cal_months_start <- cal_row   # CF applies from here down, not over the block above
 
   for (mo in months_list) {
     first_d <- as.Date(sprintf("%d-%02d-01", mo$year, mo$month))
@@ -314,16 +509,32 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
           }
           writeFormula(wb, "Calendar", x = fml,
             startRow = role_row, startCol = col)
-          # Yellow dotted border when APP3 slot is empty this day (schedule-level)
-          app3_empty <- is.na(sched_obj$schedule[[ds]]$Roaming)
+          # ── Understaffed-day marker (schedule-level, not person-level) ────
+          # A fully staffed day is 3 day workers (APP1 + APP2 + APP 3) and 1
+          # night. Anything less gets a dotted border - subtle enough not to
+          # clutter the grid, distinct enough to scan for. A missing NIGHT is
+          # the more serious gap, so it reads red; a thin day crew reads amber.
+          # LIVE via conditional formatting: both rules read the Schedule sheet's
+          # slot block for this date, so filling a slot there clears the marker
+          # here. Red (missing night) is added first so it takes priority when
+          # both apply.
           addStyle(wb, "Calendar",
             mk(fg = bg_r, bold = TRUE, font_color = F_BLUE, size = 10,
                halign = "center", valign = "center",
-               border = "All",
-               border_color = if (app3_empty) "#FFD700" else "#D0D0D0",
-               border_style = if (app3_empty) "dotted"  else "thin",
-               wrap = TRUE),
+               border = "All", border_color = "#D0D0D0", wrap = TRUE),
             rows = role_row, cols = col)
+          for (rr in c(role_row, date_row)) {
+            conditionalFormatting(wb, "Calendar", cols = col, rows = rr,
+              rule = sprintf('Schedule!$G$%d=""', row),
+              style = createStyle(border = "TopBottomLeftRight",
+                                  borderColour = "#C00000", borderStyle = "dotted",
+                                  fontColour = "#C00000"))
+            conditionalFormatting(wb, "Calendar", cols = col, rows = rr,
+              rule = sprintf('COUNTA(Schedule!$D$%d:$G$%d)<4', row, row),
+              style = createStyle(border = "TopBottomLeftRight",
+                                  borderColour = "#E8A33D", borderStyle = "dotted",
+                                  fontColour = "#E8A33D"))
+          }
         }
       }
 
@@ -351,6 +562,16 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   cal_row <- cal_row + 1L
   mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
   writeData(wb, "Calendar",
+    x = paste0("Dotted amber cell = fewer than 3 day workers that day  ·  ",
+               "dotted red = night shift unfilled"),
+    startRow = cal_row, startCol = 2, colNames = FALSE)
+  addStyle(wb, "Calendar",
+    mk(fg = "#FFFFFF", font_color = "#888888", size = 8, halign = "left"),
+    rows = cal_row, cols = 2:8)
+  setRowHeights(wb, "Calendar", rows = cal_row, heights = 13.5)
+  cal_row <- cal_row + 1L
+  mergeCells(wb, "Calendar", cols = 2:8, rows = cal_row)
+  writeData(wb, "Calendar",
     x = "Select staff member in cell C2 to change the view",
     startRow = cal_row, startCol = 2, colNames = FALSE)
   addStyle(wb, "Calendar",
@@ -360,21 +581,41 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
   # Conditional formatting for role cells — fires on formula result so updates
   # dynamically when the staff dropdown in C2 changes.
-  # CF only overrides fill/font; the static dotted border for empty APP3 days
-  # is preserved since these CF styles don't include a border definition.
+  # CF only overrides fill/font; the static dotted borders that mark understaffed
+  # days are preserved, since these CF styles carry no border definition.
+  # The range starts below the "Remaining to fill" block so its text is untouched.
   cf_end <- cal_row
-  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
-    type = "contains", rule = "APP",
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
+    type = "contains", rule = "Day",
     style = createStyle(fgFill = C_GREEN, fontColour = F_BLUE,
                         textDecoration = "bold", halign = "center"))
-  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
     type = "contains", rule = "Night",
     style = createStyle(fgFill = C_NIGHT, fontColour = F_NAVY,
                         textDecoration = "bold", halign = "center"))
-  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = 4:cf_end,
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
+    type = "contains", rule = "FC3",
+    style = createStyle(fgFill = C_FC3, fontColour = F_FC3,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
     type = "contains", rule = "OFF",
     style = createStyle(fgFill = C_PINK, fontColour = F_RED,
                         textDecoration = "bold", halign = "center"))
+  # CME / PTO / Yellow were missing here, so those days fell through to the bare
+  # row background while the Schedule sheet coloured them. Same palette as
+  # role_bg()/role_fc() so the two views agree.
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
+    type = "contains", rule = "CME",
+    style = createStyle(fgFill = C_ORANGE, fontColour = F_WHITE,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
+    type = "contains", rule = "PTO",
+    style = createStyle(fgFill = C_PTO, fontColour = F_RED,
+                        textDecoration = "bold", halign = "center"))
+  conditionalFormatting(wb, "Calendar", cols = 2:8, rows = cal_months_start:cf_end,
+    type = "contains", rule = "Yellow",
+    style = createStyle(fgFill = C_PEACH, fontColour = "#8A6D00",
+                        halign = "center"))
 
   # ════════════════════════════════════════════════════════════════════════════
   # SHEET 2 · Summary
@@ -382,21 +623,26 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   addWorksheet(wb, "Summary")
 
   SUM_COLS       <- 1L + N_STAFF
+  PP_EMPTY_COL   <- SUM_COLS + 1L          # "Empty shifts" col on Pay Period Detail
   HLPR_COL_START <- SUM_COLS + 2L          # first hidden helper column (col 13 for 10 staff)
-  LIVE_KEYS      <- c("n_night", "n_roam", "n_wknd", "n_bump")
+  # "n_roam" (APP 3 count) intentionally absent: team assignment is decided by
+  # hand, so the counter carried no decision value on this sheet.
+  LIVE_KEYS      <- c("n_sched", "n_total", "n_night", "n_wknd", "n_pto", "n_bump")
 
-  sec_hdr <- function(row, label) {
-    mergeCells(wb, "Summary", cols = 1:SUM_COLS, rows = row)
+  # `ncol` lets a section span past the staff columns (the Pay Period Detail
+  # table carries one extra column for empty shifts).
+  sec_hdr <- function(row, label, ncol = SUM_COLS) {
+    mergeCells(wb, "Summary", cols = 1:ncol, rows = row)
     writeData(wb, "Summary", x = label,
       startRow = row, startCol = 1, colNames = FALSE)
     addStyle(wb, "Summary",
       mk(fg = C_BLUE, bold = TRUE, font_color = F_WHITE,
          halign = "left", size = 11),
-      rows = row, cols = 1:SUM_COLS)
+      rows = row, cols = 1:ncol)
     setRowHeights(wb, "Summary", rows = row, heights = 20)
   }
 
-  staff_hdr <- function(row) {
+  staff_hdr <- function(row, extra = NULL) {
     addStyle(wb, "Summary",
       mk(fg = C_BLUE, bold = TRUE, font_color = F_WHITE,
          border = "All", border_color = F_WHITE),
@@ -409,25 +655,35 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
            border = "All", border_color = F_WHITE),
         rows = row, cols = 1L + ci)
     }
+    if (!is.null(extra)) {
+      writeData(wb, "Summary", x = extra,
+        startRow = row, startCol = PP_EMPTY_COL, colNames = FALSE)
+      addStyle(wb, "Summary",
+        mk(fg = C_BLUE, bold = TRUE, font_color = F_WHITE,
+           border = "All", border_color = F_WHITE, size = 9, wrap = TRUE),
+        rows = row, cols = PP_EMPTY_COL)
+    }
     setRowHeights(wb, "Summary", rows = row, heights = 18)
   }
 
   # Precompute stats
   pstats <- lapply(STAFF, function(person) {
-    shifts  <- sched_obj$person_shifts[[person]]
-    nights  <- sched_obj$person_nights[[person]]
+    shifts  <- ps_shifts(person)
+    nights  <- ps_nights(person)
     n_cred  <- sum(sapply(PAY_PERIODS$name, function(pp)
       targets[[person]][[pp]]$credited))
     pdata   <- time_off[[person]]
     n_vac   <- sum(pdata$type == "vac", na.rm = TRUE)
-    n_off   <- sum(pdata$type == "off", na.rm = TRUE)
+    # Explicit PTO days are requested days off too; count them so the
+    # "Req. Off Days" row reflects every day the person will not work.
+    n_off   <- sum(pdata$type %in% c("off", "pto"), na.rm = TRUE)
     n_pto   <- 0L
     n_bump  <- 0L
     for (ppn in PAY_PERIODS$name) {
       ppi    <- targets[[person]][[ppn]]
-      # PTO needed is derived from the off/vac day count per PP (see targets.R).
+      # PTO per PP = max(explicitly requested PTO days, formula on off/vac/pto).
       n_pto  <- n_pto + (if (is.null(ppi$pto_needed)) 0L else ppi$pto_needed)
-      actual <- sched_obj$pp_counts[[person]][[ppn]]
+      actual <- ps_ppcount(person, ppn)
       if (actual < ppi$sched_target)
         n_bump <- n_bump + (ppi$sched_target - actual)
     }
@@ -436,7 +692,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       n_day    = nrow(shifts),
       n_night  = length(nights),
       n_roam   = sum(shifts$slot == "Roaming"),
-      n_wknd   = sum(is_weekend(shifts$date)) + sum(is_weekend(nights)),
+      n_wknd   = sum(is_weekend_shift(shifts$date, shifts$slot)) +
+                 sum(is_weekend_shift(nights, "Night")),
       n_cred   = n_cred,
       n_total  = nrow(shifts) + length(nights) + n_cred,
       n_reqoff = n_vac + n_off,
@@ -470,7 +727,6 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     list("Credited Days (CME/Conf)", "n_cred",   "#FFFFFF",  TRUE),
     list("Total incl. Credited",     "n_total",  C_GRAY_LT, FALSE),
     list("Night Shifts",             "n_night",  "#FFFFFF",  FALSE),
-    list("APP 3 Shifts",             "n_roam",   C_GRAY_LT, FALSE),
     list("Weekend Shifts",           "n_wknd",   "#FFFFFF",  FALSE),
     list("Req. Off Days",             "n_reqoff", C_PEACH,    FALSE),
     list("PTO Needed",                "n_pto",    "#FFFFFF",  FALSE),
@@ -495,15 +751,40 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
 
       if (key %in% LIVE_KEYS) {
         pc  <- person_pc(ci)
-        fml <- if (key == "n_night") {
+        # Shifts worked = Day + Night cells in this person's Schedule column,
+        # which are themselves live off the slot columns.
+        n_sched_fml <- sprintf(
+          paste0('COUNTIF(Schedule!$%1$s:$%1$s,"Day")+COUNTIF(Schedule!$%1$s:$%1$s,"Night")',
+                 '+COUNTIF(Schedule!$%1$s:$%1$s,"FC3")',
+                 '+COUNTIF(Schedule!$%1$s:$%1$s,"FC3 Night")'), pc)
+        fml <- if (key == "n_sched") {
+          n_sched_fml
+        } else if (key == "n_total") {
+          # + credited CME days, which are an input and stay static.
+          sprintf('%s+%d', n_sched_fml, as.integer(pstats[[STAFF[ci]]]$n_cred))
+        } else if (key == "n_pto") {
+          # Live: per pay period, max(PTO days typed on the Schedule sheet,
+          # the automatic pto_reduction() figure), summed across the schedule.
+          # Granting a PTO day on the Schedule sheet moves this immediately.
+          paste(vapply(seq_len(N_PP), function(k) {
+            ppn_k <- PAY_PERIODS$name[k]
+            sprintf('MAX(COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"PTO"),%4$d)',
+                    MAX_SCHED_ROW, ppn_k, pc,
+                    as.integer(targets[[STAFF[ci]]][[ppn_k]]$pto_auto))
+          }, character(1L)), collapse = "+")
+        } else if (key == "n_night") {
           sprintf('COUNTIF(Schedule!$%1$s:$%1$s,"Night")', pc)
-        } else if (key == "n_roam") {
-          sprintf('COUNTIF(Schedule!$%1$s:$%1$s,"APP 3")', pc)
         } else if (key == "n_wknd") {
+          # Weekend = Friday NIGHT plus every shift on Sat/Sun. Two terms: the
+          # Sat/Sun block (Day or Night), and Friday nights only.
           sprintf(paste0(
             'SUMPRODUCT(((Schedule!$B$2:$B$%1$d="Sat")+(Schedule!$B$2:$B$%1$d="Sun"))',
-            '*((Schedule!$%2$s$2:$%2$s$%1$d="APP1")+(Schedule!$%2$s$2:$%2$s$%1$d="APP2")',
-            '+(Schedule!$%2$s$2:$%2$s$%1$d="APP 3")+(Schedule!$%2$s$2:$%2$s$%1$d="Night")))'),
+            '*((Schedule!$%2$s$2:$%2$s$%1$d="Day")',
+            '+(Schedule!$%2$s$2:$%2$s$%1$d="Night")',
+            '+(Schedule!$%2$s$2:$%2$s$%1$d="FC3")',
+            '+(Schedule!$%2$s$2:$%2$s$%1$d="FC3 Night")))',
+            '+SUMPRODUCT((Schedule!$B$2:$B$%1$d="Fri")',
+            '*(Schedule!$%2$s$2:$%2$s$%1$d="Night"))'),
             MAX_SCHED_ROW, pc)
         } else {
           # n_bump: compare per-PP targets (rows 1:N_PP) vs live COUNTIFS actuals (rows N_PP+1:2*N_PP)
@@ -514,6 +795,13 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
         writeFormula(wb, "Summary", x = fml, startRow = srow, startCol = 1L + ci)
         cbg <- if (key == "n_bump") "#FFFAF0" else "#FFFFFF"
         cbold <- FALSE; cfc <- F_NAVY
+        # n_pto used to be styled from its static value; as a live cell the
+        # highlight has to be conditional on the computed result.
+        if (key == "n_pto")
+          conditionalFormatting(wb, "Summary", cols = 1L + ci, rows = srow,
+            rule = ">0",
+            style = createStyle(fgFill = "#FF9999", fontColour = F_RED,
+                                textDecoration = "bold"))
       } else {
         writeData(wb, "Summary", x = val, startRow = srow, startCol = 1L + ci, colNames = FALSE)
       }
@@ -538,8 +826,8 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   }
 
   # ── Pay Period Detail section ─────────────────────────────────────────────
-  sec_hdr(srow, "Pay Period Detail"); srow <- srow + 1L
-  staff_hdr(srow);                    srow <- srow + 1L
+  sec_hdr(srow, "Pay Period Detail", ncol = PP_EMPTY_COL); srow <- srow + 1L
+  staff_hdr(srow, extra = "Empty shifts");                 srow <- srow + 1L
 
   for (i in seq_len(N_PP)) {
     ppn    <- PAY_PERIODS$name[i]
@@ -554,27 +842,91 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       rows = srow, cols = 1)
     for (ci in seq_along(STAFF)) {
       person  <- STAFF[ci]
-      actual  <- sched_obj$pp_counts[[person]][[ppn]]
+      actual  <- ps_ppcount(person, ppn)
       ppi     <- targets[[person]][[ppn]]
       n_vac_p <- sum(time_off[[person]]$type == "vac" &
         time_off[[person]]$date >= PAY_PERIODS$start[i] &
         time_off[[person]]$date <= PAY_PERIODS$end[i])
-      txt <- sprintf("%d/%d", actual, ppi$sched_target)
-      if (ppi$credited > 0) txt <- paste0(txt, sprintf(" \u00B7%dc", ppi$credited))
-      if (n_vac_p  > 0)     txt <- paste0(txt, sprintf(" \u00B7%dv", n_vac_p))
-      cbg <- if (ppi$credited > 0)      C_ORANGE
-             else if (actual < ppi$sched_target) "#FFE0E0"
-             else if (n_vac_p  > 0)     C_PEACH
-             else                       C_GREEN
-      cfc  <- if (ppi$credited > 0) F_WHITE else F_NAVY
-      cbold <- actual < ppi$sched_target
-      writeData(wb, "Summary", x = txt,
-        startRow = srow, startCol = 1L + ci, colNames = FALSE)
+      # Denominator is the BASE pay-period target (normally 6), not sched_target.
+      # sched_target is already net of CME and PTO, which made the denominator
+      # vary (5, 4 ...) and read as though the target itself had moved.
+      # Reconstructed rather than re-derived from BASE_TARGETS so it cannot drift
+      # from targets.R:  sched_target = base - pto_needed - credited.
+      base_tgt <- ppi$sched_target + ppi$credited + ppi$pto_needed
+      # Numerator counts everything that fills the period: shifts worked, CME
+      # days credited, and PTO days. So "6/6" always means the pay period is
+      # complete, however it was made up.
+      # ── LIVE cell: "<worked+CME+PTO>/<base>  N CME, N PTO, N vac" ──────────
+      # Worked shifts come from the hidden helper (a COUNTIFS over the slot
+      # columns for this pay period), so slot edits flow straight through.
+      #
+      # PTO is live too: typing "PTO" over a person's cell on the Schedule sheet
+      # for a date in this period grants them a day, and the cell moves e.g.
+      # "5/6  1 PTO" -> "6/6  2 PTO". Granting PTO raises the numerator because
+      # a PTO day counts toward the period, exactly as CME does.
+      #
+      # It is max(typed PTO days, automatic PTO) so the pto_reduction() formula
+      # still applies as a floor - the same rule compute_targets() uses.
+      hc  <- col_letter(HLPR_COL_START + ci - 1L)
+      pc  <- person_pc(ci)
+      P   <- sprintf('MAX(COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"PTO"),%4$d)',
+                     MAX_SCHED_ROW, ppn, pc, as.integer(ppi$pto_auto))
+      # CME and vacation are inputs from the request sheet and stay static.
+      static_parts <- character(0)
+      if (ppi$credited > 0) static_parts <- c(static_parts, sprintf("%d CME", ppi$credited))
+      if (n_vac_p      > 0) static_parts <- c(static_parts, sprintf("%d vac", n_vac_p))
+      static_txt <- paste(static_parts, collapse = ", ")
+      # Suffix has to be built in-formula so the PTO count can vary.
+      lead <- if (nzchar(static_txt)) sprintf('"  %s, "', static_txt) else '"  "'
+      none <- if (nzchar(static_txt)) sprintf('"  %s"',   static_txt) else '""'
+      suffix_expr <- sprintf('IF(%1$s>0,%2$s&%1$s&" PTO",%3$s)', P, lead, none)
+      fml <- sprintf('(%s%d+%d+%s)&"/%d"&%s',
+                     hc, N_PP + i, as.integer(ppi$credited), P,
+                     base_tgt, suffix_expr)
+      writeFormula(wb, "Summary", x = fml, startRow = srow, startCol = 1L + ci)
+      # Colour answers one question only: is this pay period filled? Applied as
+      # conditional formatting on the live count, so it tracks edits too. All
+      # complete periods share one fill regardless of HOW they were filled.
       addStyle(wb, "Summary",
-        mk(fg = cbg, bold = cbold, font_color = cfc,
+        mk(fg = C_GREEN, font_color = F_NAVY,
            border = "All", border_color = "#DDDDDD", size = 9),
         rows = srow, cols = 1L + ci)
+      live_expr <- sprintf('%s%d+%d+%s', hc, N_PP + i, as.integer(ppi$credited), P)
+      # Short of the period target: red.
+      conditionalFormatting(wb, "Summary", cols = 1L + ci, rows = srow,
+        rule = sprintf('%s<%d', live_expr, base_tgt),
+        # Dark red on a stronger pink: the old pale pink sat too close to the
+        # pale green of a complete period to read at a glance.
+        style = createStyle(fgFill = "#FFC7CE", fontColour = "#9C0006",
+                            textDecoration = "bold"))
+      # OVER the period target: blue. Reachable now that PTO can be granted from
+      # the Schedule sheet - granting a day to someone already at 6/6 pushes them
+      # to 7/6 until a shift is freed up. Worth seeing rather than reading as
+      # "complete".
+      conditionalFormatting(wb, "Summary", cols = 1L + ci, rows = srow,
+        rule = sprintf('%s>%d', live_expr, base_tgt),
+        style = createStyle(fgFill = "#D6E4F3", fontColour = "#0066CC",
+                            textDecoration = "bold"))
     }
+    # ── Empty shifts in this pay period ───────────────────────────────────
+    # A fully staffed day is 3 day workers (APP1 + APP2 + APP 3) plus a night,
+    # so this counts every one of those four slots left unfilled across the pay
+    # period - the same standard the calendar's dotted borders use.
+    # LIVE: blank cells in the slot block D:G across this pay period's rows.
+    pp_days <- all_d[all_d >= PAY_PERIODS$start[i] & all_d <= PAY_PERIODS$end[i]]
+    prow    <- unlist(sched_row_map[as.character(pp_days)])
+    writeFormula(wb, "Summary",
+      x = sprintf('COUNTBLANK(Schedule!$D$%d:$G$%d)', min(prow), max(prow)),
+      startRow = srow, startCol = PP_EMPTY_COL)
+    addStyle(wb, "Summary",
+      mk(fg = C_GREEN, font_color = F_NAVY,
+         border = "All", border_color = "#DDDDDD", size = 9),
+      rows = srow, cols = PP_EMPTY_COL)
+    conditionalFormatting(wb, "Summary", cols = PP_EMPTY_COL, rows = srow,
+      rule = ">0",
+      style = createStyle(fgFill = "#FFE0E0", fontColour = "#C00000",
+                          textDecoration = "bold"))
+
     setRowHeights(wb, "Summary", rows = srow, heights = 16)
     srow <- srow + 1L
   }
@@ -643,15 +995,21 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
         x = as.integer(targets[[person]][[PAY_PERIODS$name[k]]]$sched_target),
         startRow = k, startCol = hcn, colNames = FALSE)
     }
+    # Count this person's NAME in the slot columns D:G for the pay period -
+    # NOT "Day"/"Night" in their own column. The person columns are formulas
+    # that (in their Yellow branch) read THIS helper cell; counting them here
+    # would close a reference loop and Excel would flag a circular reference.
+    # The slot columns are plain input, so reading them is cycle-free.
     for (k in seq_len(N_PP)) {
       ppn <- PAY_PERIODS$name[k]
+      one <- function(slot_col) sprintf(
+        'COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"%4$s")',
+        MAX_SCHED_ROW, ppn, slot_col, person)
+      # Every slot column, MICU (D:G) and FC3 (H:J) alike - an FC3 shift counts
+      # toward the pay-period total exactly like a MICU one.
+      slot_cols <- vapply(MICU_COL_FIRST:FC3_COL_LAST, col_letter, character(1L))
       writeFormula(wb, "Summary",
-        x = sprintf(paste0(
-          'COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP1")',
-          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP2")',
-          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"APP 3")',
-          '+COUNTIFS(Schedule!$C$2:$C$%1$d,"%2$s",Schedule!$%3$s$2:$%3$s$%1$d,"Night")'),
-          MAX_SCHED_ROW, ppn, pc),
+        x = paste(vapply(slot_cols, one, character(1L)), collapse = "+"),
         startRow = N_PP + k, startCol = hcn)
     }
   }
@@ -665,24 +1023,62 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
   # ════════════════════════════════════════════════════════════════════════════
   addWorksheet(wb, "Schedule")
 
-  # Col layout: Date | Day | PP | APP1 | APP2 | APP3 | Night | [staff...] | _key_
-  # Day and night are merged into one row per calendar day.
-  N_HDR  <- 7L
+  # Col layout:
+  #   A Date | B Day | C PP | D E F  MICU day | G MICU night | H I J  FC3 |
+  #   [staff...] | _key_
+  # Row 1 is a group banner (MICU over D:G, FC3 over H:J); row 2 holds the real
+  # column headers. Day and night are merged into one row per calendar day.
+  #
+  # FC3 is a separate service, staffed BY HAND - the solver never writes those
+  # columns. A shift there counts exactly like any other shift for the person:
+  # it shows in their column, their pay-period total and their weekend count.
+  # What it does NOT do is create a hole: the understaffed markers, the Empty
+  # shifts column and Requested Changes all stay on the MICU block (D:G), since
+  # an empty FC3 slot is the normal case, not a gap.
   N_COLS <- N_HDR + N_STAFF + 1L
 
+  # Row 1: group banner
+  mergeCells(wb, "Schedule", cols = MICU_COL_FIRST:MICU_COL_LAST, rows = 1)
+  writeData(wb, "Schedule", x = "MICU", startRow = 1, startCol = MICU_COL_FIRST,
+            colNames = FALSE)
+  addStyle(wb, "Schedule",
+    mk(fg = C_NAVY, bold = TRUE, size = 11, font_color = F_WHITE),
+    rows = 1, cols = MICU_COL_FIRST:MICU_COL_LAST)
+  mergeCells(wb, "Schedule", cols = FC3_COL_FIRST:FC3_COL_LAST, rows = 1)
+  writeData(wb, "Schedule", x = "FC3", startRow = 1, startCol = FC3_COL_FIRST,
+            colNames = FALSE)
+  addStyle(wb, "Schedule",
+    mk(fg = F_FC3, bold = TRUE, size = 11, font_color = F_WHITE),
+    rows = 1, cols = FC3_COL_FIRST:FC3_COL_LAST)
+  addStyle(wb, "Schedule", mk(fg = C_NAVY), rows = 1,
+    cols = setdiff(seq_len(N_COLS), MICU_COL_FIRST:FC3_COL_LAST))
+  setRowHeights(wb, "Schedule", rows = 1, heights = 18)
+
+  # Row 2: column headers
   hdr <- c("Date","Day","PP",
-           "APP 1","APP 2","APP 3","Night Shift",
+           # Slot identity is decided by hand, so all three MICU day columns
+           # read "DAY"; only day-vs-night is a real distinction here.
+           "DAY","DAY","DAY","NIGHT",
+           "FC3_D","FC3_D","FC3_N",
            STAFF, "_key_")
   writeData(wb, "Schedule", x = as.data.frame(t(hdr)),
-    startRow = 1, startCol = 1, colNames = FALSE)
+    startRow = SCHED_HDR_ROW, startCol = 1, colNames = FALSE)
   addStyle(wb, "Schedule",
     mk(fg = C_NAVY, bold = TRUE, font_color = F_WHITE,
        border = "Bottom", border_color = F_WHITE),
-    rows = 1, cols = seq_along(hdr))
-  setRowHeights(wb, "Schedule", rows = 1, heights = 20)
-  freezePane(wb, "Schedule", firstRow = TRUE)
+    rows = SCHED_HDR_ROW, cols = seq_along(hdr))
+  setRowHeights(wb, "Schedule", rows = SCHED_HDR_ROW, heights = 20)
+  freezePane(wb, "Schedule", firstActiveRow = SCHED_HDR_ROW + 1L)
 
-  schr  <- 2L
+  # ── Section rules around the shift blocks ──────────────────────────────────
+  # The sheet reads as bands: Date/Day/PP on the left, WHO is on each shift in
+  # D-J, and the per-person view on the right. A thick edge boxes MICU and FC3
+  # separately. Applied after the per-cell styling below, since openxlsx styles
+  # overwrite rather than merge - see the addStyle calls near the end.
+  SHIFT_COL_FIRST <- MICU_COL_FIRST
+  SHIFT_COL_LAST  <- FC3_COL_LAST
+
+  schr  <- SCHED_HDR_ROW + 1L
   prev_pp <- ""
 
   for (d_raw in all_d) {
@@ -750,15 +1146,16 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
       x = data.frame(Date = date_str, Day = day_lbl, PP = pp_lbl,
                      stringsAsFactors = FALSE),
       startRow = dr, startCol = 1, colNames = FALSE)
-    slot_fml <- function(role) sprintf(
-      'IFERROR(INDEX($%s$1:$%s$1,MATCH("%s",SUBSTITUTE(%s%d:%s%d," ",""),0)),"")',
-      S_LTR, E_LTR, role, S_LTR, dr, E_LTR, dr)
-    writeFormula(wb, "Schedule", x = slot_fml("APP1"),  startRow = dr, startCol = 4L)
-    writeFormula(wb, "Schedule", x = slot_fml("APP2"),  startRow = dr, startCol = 5L)
-    writeFormula(wb, "Schedule", x = slot_fml("APP3"),  startRow = dr, startCol = 6L)
-    writeFormula(wb, "Schedule", x = slot_fml("Night"), startRow = dr, startCol = 7L)
+    # Written statically rather than by reverse lookup: the person cells now all
+    # read "Day", so MATCH("Day", ...) could not tell APP1 from APP2 from APP3.
+    # The occupants are already known here, so no formula is needed.
+    writeData(wb, "Schedule", x = data.frame(a = app1, b = app2, c = roam, d = night,
+                                             stringsAsFactors = FALSE),
+              startRow = dr, startCol = 4L, colNames = FALSE)
+    # _key_: a real Date (not text) so other sheets can MATCH on a typed date
+    # without locale-dependent TEXT() formatting. Used by "Requested Changes".
     writeData(wb, "Schedule",
-      x = date_str, startRow = dr, startCol = N_COLS, colNames = FALSE)
+      x = d, startRow = dr, startCol = N_COLS, colNames = FALSE)
 
     # Date / Day / PP cols
     addStyle(wb, "Schedule",
@@ -780,35 +1177,75 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
         rows = dr, cols = 3L + j)
     }
 
-    # Night slot col (7)
+    # Night slot col — MICU_COL_LAST (G), NOT N_HDR. N_HDR moved from 7 to 10
+    # when the FC3 block was added, which silently sent this styling to the last
+    # FC3 column and left Night unstyled.
     cbg_n <- if (nchar(night) > 0) (if (is_h) C_YELLOW else C_NIGHT) else bg_day
     addStyle(wb, "Schedule",
       mk(fg = cbg_n, bold = nchar(night) > 0,
          font_color = if (nchar(night) > 0) F_NAVY else F_GRAY,
          border = "All", border_color = "#DDDDDD", size = 9),
-      rows = dr, cols = N_HDR)
+      rows = dr, cols = MICU_COL_LAST)
 
-    # Per-staff cols — show full role (day, night, or time-off) in one cell
+    # FC3 slot cols (H:J) — filled by hand, so they start empty. Ground tint
+    # only; the fill when a name is typed comes from conditional formatting.
+    for (cc in FC3_COL_FIRST:FC3_COL_LAST)
+      addStyle(wb, "Schedule",
+        mk(fg = bg_day, font_color = F_FC3, size = 9,
+           border = "All", border_color = "#DDDDDD"),
+        rows = dr, cols = cc)
+
+    # ── Per-staff cols: LIVE formulas driven by the slot columns D-G ──────────
+    # The slot columns are the editable input. Each person cell derives itself:
+    #   name appears in D/E/F  -> "Day"
+    #   name appears in G      -> "Night"
+    #   otherwise              -> that person's time-off marker for the day
+    #                             (OFF / CME / PTO / Yellow / blank), baked in
+    #                             as a literal because time-off does not change
+    #                             by editing the schedule.
+    # So typing a name into an empty slot updates their column, and through it
+    # the Calendar and every Summary count, without re-running anything.
+    #
+    # "Yellow" is shown only while it is actionable: the day is not yet fully
+    # staffed (COUNTA of D:G < 4) AND the person is still short in that pay
+    # period - read live from the Summary helper block, where row k holds the
+    # target and row N_PP+k the running count.
+    k_pp <- if (is.na(pp)) NA_integer_ else match(pp, PAY_PERIODS$name)
     for (ci in seq_along(STAFF)) {
       person <- STAFF[ci]
       col    <- N_HDR + ci
-      role   <- role_lookup[[ds]][[person]]
-      if (is.na(role)) role <- ""
-      is_night_role <- role == "Night"
-      cbg <- {
-        rb <- role_bg(role, is_h)
-        if (is.null(rb)) (if (is_night_role) C_NIGHT else bg_day) else rb
+      pc     <- person_pc(ci)
+      # Time-off-only role: what the cell shows when the person is NOT on a slot.
+      off_role <- role_of(person, d, list(), time_off)
+      tail <- if (identical(off_role, "Yellow") && !is.na(k_pp)) {
+        hc <- col_letter(HLPR_COL_START + ci - 1L)
+        sprintf('IF(AND(COUNTA($D%1$d:$G%1$d)<4,Summary!$%2$s$%3$d<Summary!$%2$s$%4$d),"Yellow","")',
+                dr, hc, N_PP + k_pp, k_pp)
+      } else if (nzchar(off_role) && !identical(off_role, "Yellow")) {
+        sprintf('"%s"', off_role)
+      } else {
+        '""'
       }
-      cfc   <- if (nchar(role) > 0) role_fc(role) else F_GRAY
-      bdr_c <- "#DDDDDD"; bdr_s <- "thin"
-      if (role %in% c("APP1","APP2","APP 3") && is_dbn(d, person)) {
-        bdr_c <- C_ORANGE; bdr_s <- "dashed"
-      }
-      writeData(wb, "Schedule", x = role,
-        startRow = dr, startCol = col, colNames = FALSE)
+      # MICU day (D:F) -> "Day"; MICU night (G) -> "Night";
+      # FC3 day (H:I) -> "FC3"; FC3 night (J) -> "FC3 Night".
+      # Header row is 2, so the name to match lives at <col>$2.
+      #
+      # NOTE: "FC3 Night" is a DISTINCT token from "Night". Every COUNTIF that
+      # tallies shifts has to list it explicitly - COUNTIF matches whole cell
+      # values, so "FC3 Night" is not caught by "FC3" or by "Night". That also
+      # means it correctly stays OUT of the MICU night count.
+      fml <- sprintf(
+        paste0('IF(OR($D%1$d=%2$s$2,$E%1$d=%2$s$2,$F%1$d=%2$s$2),"Day",',
+               'IF($G%1$d=%2$s$2,"Night",',
+               'IF(OR($H%1$d=%2$s$2,$I%1$d=%2$s$2),"FC3",',
+               'IF($J%1$d=%2$s$2,"FC3 Night",%3$s))))'),
+        dr, pc, tail)
+      writeFormula(wb, "Schedule", x = fml, startRow = dr, startCol = col)
+      # Base style only (weekend/holiday ground + border). Role colours are
+      # conditional formatting applied after the loop, since the value is live.
       addStyle(wb, "Schedule",
-        mk(fg = cbg, bold = nchar(role) > 0, font_color = cfc,
-           border = "All", border_color = bdr_c, border_style = bdr_s, size = 9),
+        mk(fg = bg_day, size = 9, halign = "center",
+           border = "All", border_color = "#DDDDDD"),
         rows = dr, cols = col)
     }
     addStyle(wb, "Schedule",
@@ -819,9 +1256,184 @@ build_excel <- function(sched_obj, time_off, targets, output_path) {
     schr <- schr + 1L
   }
 
+  # ── Slot columns D-G are the EDITABLE input ────────────────────────────────
+  # Dropdown of staff names so a slot is picked, not typed (a typo would match
+  # no one's column and silently vanish from every count).
+  .last_row <- schr - 1L
+  dataValidation(wb, "Schedule", cols = SHIFT_COL_FIRST:SHIFT_COL_LAST,
+    rows = (SCHED_HDR_ROW + 1L):.last_row, type = "list", allowBlank = TRUE,
+    value = paste0('"', paste(STAFF, collapse = ","), '"'))
+  # Live fill: a name in a day slot reads green, in the night slot blue, so a
+  # freshly typed name is coloured immediately. Empty slots keep the row ground
+  # set above, which is what makes a hole visible.
+  conditionalFormatting(wb, "Schedule",
+    cols = MICU_COL_FIRST:(MICU_COL_LAST - 1L), rows = (SCHED_HDR_ROW + 1L):.last_row,
+    type = "notBlanks",
+    style = createStyle(fgFill = C_GREEN, fontColour = F_BLUE, textDecoration = "bold"))
+  conditionalFormatting(wb, "Schedule",
+    cols = MICU_COL_LAST, rows = (SCHED_HDR_ROW + 1L):.last_row,
+    type = "notBlanks",
+    style = createStyle(fgFill = C_NIGHT, fontColour = F_NAVY, textDecoration = "bold"))
+  conditionalFormatting(wb, "Schedule",
+    cols = FC3_COL_FIRST:FC3_COL_LAST, rows = (SCHED_HDR_ROW + 1L):.last_row,
+    type = "notBlanks",
+    style = createStyle(fgFill = C_FC3, fontColour = F_FC3, textDecoration = "bold"))
+  # Holiday rows LAST so they win. openxlsx assigns conditional-format priority
+  # in reverse order of addition - the rule added last gets priority 1, which is
+  # the one Excel applies. Added before the fill rules above, these would have
+  # been outranked and a staffed holiday would repaint green/blue.
+  for (hd in HOLIDAY_DATES) {
+    hr <- sched_row_map[[as.character(as.Date(hd, origin = "1970-01-01"))]]
+    if (is.null(hr)) next
+    conditionalFormatting(wb, "Schedule",
+      cols = MICU_COL_FIRST:MICU_COL_LAST, rows = hr, type = "notBlanks",
+      style = createStyle(fgFill = C_YELLOW, fontColour = F_GOLD,
+                          textDecoration = "bold"))
+  }
+
+  # ── Per-person columns: role colours as conditional formatting ─────────────
+  # The cell values are formulas now, so their colour must follow the computed
+  # text. "contains" rules; none of these tokens is a substring of another.
+  .pcols <- (N_HDR + 1L):(N_HDR + N_STAFF)
+  .cf <- function(token, fill, font, bold = TRUE)
+    conditionalFormatting(wb, "Schedule", cols = .pcols,
+      rows = (SCHED_HDR_ROW + 1L):.last_row,
+      type = "contains", rule = token,
+      style = createStyle(fgFill = fill, fontColour = font,
+                          textDecoration = if (bold) "bold" else NULL,
+                          halign = "center"))
+  .cf("Day",    C_GREEN,  F_BLUE)
+  .cf("Night",  C_NIGHT,  F_NAVY)
+  # AFTER "Night" on purpose: "FC3 Night" contains both tokens, and openxlsx
+  # assigns conditional-format priority in reverse order of addition, so the
+  # later rule wins. This keeps an FC3 night reading as FC3, not as a MICU night.
+  .cf("FC3",    C_FC3,    F_FC3)
+  .cf("OFF",    C_PINK,   F_RED)
+  .cf("CME",    C_ORANGE, F_WHITE)
+  .cf("PTO",    C_PTO,    F_RED)
+  .cf("Yellow", C_PEACH,  "#8A6D00", bold = FALSE)
+
+  # Day-before-night flag (a day shift immediately followed by a night): one
+  # relative formula rule per column covers every row. Dashed orange border.
+  for (ci in seq_along(STAFF)) {
+    pc <- person_pc(ci)
+    conditionalFormatting(wb, "Schedule", cols = N_HDR + ci,
+      rows = (SCHED_HDR_ROW + 1L):(.last_row - 1L),
+      rule = sprintf('AND($%1$s%2$d="Day",$%1$s%3$d="Night")', pc,
+                     SCHED_HDR_ROW + 1L, SCHED_HDR_ROW + 2L),
+      style = createStyle(border = "TopBottomLeftRight", borderColour = C_ORANGE,
+                          borderStyle = "dashed"))
+  }
+
+  # ── Box the shift block (cols D-G) ─────────────────────────────────────────
+  # Applied LAST and with stack = TRUE: openxlsx replaces a cell's style wholesale
+  # otherwise, which would strip the fills and fonts set per cell above. Stacking
+  # merges the border in and leaves the rest intact.
+  for (edge in list(c(MICU_COL_FIRST, MICU_COL_LAST), c(FC3_COL_FIRST, FC3_COL_LAST))) {
+    addStyle(wb, "Schedule",
+      createStyle(border = "left", borderColour = "#000000", borderStyle = "medium"),
+      rows = 1:.last_row, cols = edge[1], gridExpand = TRUE, stack = TRUE)
+    addStyle(wb, "Schedule",
+      createStyle(border = "right", borderColour = "#000000", borderStyle = "medium"),
+      rows = 1:.last_row, cols = edge[2], gridExpand = TRUE, stack = TRUE)
+    addStyle(wb, "Schedule",
+      createStyle(border = "top", borderColour = "#000000", borderStyle = "medium"),
+      rows = 1, cols = edge[1]:edge[2], gridExpand = TRUE, stack = TRUE)
+    addStyle(wb, "Schedule",
+      createStyle(border = "bottom", borderColour = "#000000", borderStyle = "medium"),
+      rows = .last_row, cols = edge[1]:edge[2], gridExpand = TRUE, stack = TRUE)
+  }
+
   setColWidths(wb, "Schedule",
     cols   = seq_len(N_COLS),
-    widths = c(14, 7, 7, 16, 14, 16, 16, rep(13, N_STAFF), 20))
+    widths = c(14, 7, 7, 16, 14, 16, 16, 14, 14, 14, rep(13, N_STAFF), 20))
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SHEET 4 · Requested Changes
+  # ════════════════════════════════════════════════════════════════════════════
+  # A change log keyed by date. Type a date in column A and PP# and Open Shifts
+  # fill in by formula from the Schedule sheet - and stay LIVE, so once the
+  # requested change is made on the Schedule sheet the row's Open Shifts drops
+  # to "none" and it reads as resolved. Provider Add is a dropdown; Notes is
+  # free text. Pre-seeded with every date that currently has an open mandatory
+  # slot, followed by blank rows for ad-hoc entries.
+  addWorksheet(wb, "Requested Changes")
+  RC <- "Requested Changes"
+  KL <- col_letter(N_COLS)                       # Schedule _key_ (date) column
+  N_BLANK_ROWS <- 30L
+
+  mergeCells(wb, RC, cols = 1:5, rows = 1)
+  writeData(wb, RC, x = sprintf("Requested Changes · %s – %s",
+                                format(SCHEDULE_START, "%b %d"),
+                                format(SCHEDULE_END,   "%b %d, %Y")),
+            startRow = 1, startCol = 1, colNames = FALSE)
+  addStyle(wb, RC, mk(fg = C_NAVY, bold = TRUE, size = 13, font_color = F_WHITE,
+                      halign = "left"), rows = 1, cols = 1:5)
+  setRowHeights(wb, RC, rows = 1, heights = 27.75)
+
+  rc_hdr <- c("Date", "PP#", "Open Shifts", "Provider Add", "Notes")
+  writeData(wb, RC, x = as.data.frame(t(rc_hdr)), startRow = 2, startCol = 1,
+            colNames = FALSE)
+  addStyle(wb, RC, mk(fg = C_BLUE, bold = TRUE, font_color = F_WHITE,
+                      border = "All", border_color = F_WHITE), rows = 2, cols = 1:5)
+  freezePane(wb, RC, firstActiveRow = 3)
+
+  # Dates that currently have an open mandatory slot (APP1 / APP2 / Night).
+  seed_dates <- all_d[vapply(all_d, function(dd) {
+    day_s <- sched_obj$schedule[[as.character(as.Date(dd, origin = "1970-01-01"))]]
+    any(vapply(c("APP1", "APP2", "Night"), function(sl) {
+      v <- day_s[[sl]]; length(v) != 1L || is.na(v)
+    }, logical(1L)))
+  }, logical(1L))]
+  seed_dates <- as.Date(seed_dates, origin = "1970-01-01")
+
+  rc_first <- 3L
+  rc_last  <- rc_first + length(seed_dates) + N_BLANK_ROWS - 1L
+  for (r in rc_first:rc_last) {
+    i <- r - rc_first + 1L
+    if (i <= length(seed_dates))
+      writeData(wb, RC, x = seed_dates[i], startRow = r, startCol = 1, colNames = FALSE)
+    # Row of the Schedule sheet holding this date (0 when not found).
+    M  <- sprintf('MATCH($A%d,Schedule!$%s$1:$%s$%d,0)', r, KL, KL, MAX_SCHED_ROW)
+    nd <- sprintf('(3-COUNTA(INDEX(Schedule!$D$1:$F$%d,%s,0)))', MAX_SCHED_ROW, M)
+    nn <- sprintf('IF(INDEX(Schedule!$G$1:$G$%d,%s)="",1,0)', MAX_SCHED_ROW, M)
+    writeFormula(wb, RC, startRow = r, startCol = 2,
+      x = sprintf('IF($A%d="","",IFERROR(INDEX(Schedule!$C$1:$C$%d,%s),"not in schedule"))',
+                  r, MAX_SCHED_ROW, M))
+    writeFormula(wb, RC, startRow = r, startCol = 3,
+      x = sprintf(paste0(
+        'IF($A%1$d="","",IFERROR(IF(%2$s+%3$s=0,"none",',
+        'IF(%2$s>0,%2$s&" day","")&IF(AND(%2$s>0,%3$s>0),", ","")&IF(%3$s>0,"night","")),',
+        '"not in schedule"))'), r, nd, nn))
+    addStyle(wb, RC, mk(halign = "center", border = "All", border_color = "#DDDDDD",
+                        size = 10), rows = r, cols = 1:5)
+    addStyle(wb, RC, createStyle(numFmt = "mm/dd/yy", halign = "center",
+                                 border = "TopBottomLeftRight", borderColour = "#DDDDDD"),
+             rows = r, cols = 1)
+    addStyle(wb, RC, mk(halign = "left", border = "All", border_color = "#DDDDDD",
+                        size = 10, wrap = TRUE), rows = r, cols = 5)
+  }
+  dataValidation(wb, RC, cols = 1, rows = rc_first:rc_last, type = "date",
+    operator = "between", value = c(SCHEDULE_START, SCHEDULE_END))
+  dataValidation(wb, RC, cols = 4, rows = rc_first:rc_last, type = "list",
+    allowBlank = TRUE, value = paste0('"', paste(STAFF, collapse = ","), '"'))
+  # Open Shifts: amber while something is open, green once it reads "none".
+  conditionalFormatting(wb, RC, cols = 3, rows = rc_first:rc_last,
+    type = "contains", rule = "none",
+    style = createStyle(fgFill = C_GREEN, fontColour = F_NAVY))
+  conditionalFormatting(wb, RC, cols = 3, rows = rc_first:rc_last,
+    rule = sprintf('AND($C%1$d<>"",$C%1$d<>"none")', rc_first),
+    style = createStyle(fgFill = "#FFF2CC", fontColour = "#7F6000",
+                        textDecoration = "bold"))
+  setColWidths(wb, RC, cols = 1:5, widths = c(12, 8, 16, 16, 48))
+
+  # ── Force a full recalculation when Excel opens the file ──────────────────
+  # openxlsx writes formulas with NO cached result and no calcChain. Excel will
+  # usually recompute them, but conditional formatting that depends on those
+  # results is not reliably re-evaluated - which left the Pay Period Detail
+  # highlights not firing. fullCalcOnLoad makes Excel recompute everything
+  # (values and conditional formats) the moment the workbook opens.
+  wb$workbook$calcPr <- '<calcPr calcId="171027" fullCalcOnLoad="1"/>'
 
   # ── Save ───────────────────────────────────────────────────────────────────
   saveWorkbook(wb, output_path, overwrite = TRUE)

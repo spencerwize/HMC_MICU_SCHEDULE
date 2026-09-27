@@ -9,13 +9,18 @@
 #
 #   • Column order doesn't matter — columns are matched by header name.
 #   • The date column must be named "Date" (case-insensitive).
-#   • Blank cell → available to work (no entry recorded).
+#   • Blank cell → neutral 'yellow' day: schedulable, not requested.
 #
 # ── Cell values (case-insensitive) ───────────────────────────────────────────
 #
 #   "cme", "conf", "conference"          → cme  (credited, no shift target)
 #   "vac", "vacation", or VAC_KEYWORDS   → vac  (may become PTO)
-#   anything else non-blank              → off  (plain off day)
+#   "w", "work", "green", or WORK_KEYWORDS → green (REQUESTED WORK day)
+#   anything else non-blank                 → off   (plain off day)
+#
+#   Order matters: CME beats VAC beats WORK, so "CME trip" is cme and
+#   "work trip" is vac. Unrecognised values become "off" (the safe default)
+#   and are reported as a typo warning at parse time.
 #
 # ── Auth for private Google Sheets ───────────────────────────────────────────
 #
@@ -29,7 +34,8 @@
 #     Pass the resulting URL as `path`.  No GS_SERVICE_ACCOUNT_JSON needed.
 #
 # Returns: named list  person → data.frame(date = Date, type = chr)
-#   type values: "off" | "vac" | "cme"
+#   type values: "off" | "vac" | "cme" | "green"
+#   A date with NO row is a neutral "yellow" day.
 # ─────────────────────────────────────────────────────────────────────────────
 
 parse_time_off <- function(path, sheet = NULL) {
@@ -69,7 +75,16 @@ parse_time_off <- function(path, sheet = NULL) {
   # whoever is actually listed in the sheet — no code changes needed when
   # people are added or removed.
   detected <- trimws(hdr[-date_col])
+  # Drop columns that are not people:
+  #   • blank headers
+  #   • tibble/readr name-repair placeholders ("...1", "...2", ...) - the sheet
+  #     has an unnamed first column holding day names, which would otherwise be
+  #     detected as an 11th staff member whose every cell reads as a day OFF
+  #   • explicit day/weekday label columns
   detected <- detected[nzchar(detected)]
+  detected <- detected[!grepl("^[.]{3}[0-9]+$", detected)]
+  detected <- detected[!tolower(detected) %in%
+                         c("day", "days", "weekday", "day of week", "dow", "notes")]
   if (length(detected) > 0) {
     STAFF <<- detected
     message("Staff detected from sheet (", length(STAFF), "): ",
@@ -93,6 +108,8 @@ parse_time_off <- function(path, sheet = NULL) {
 
   # ── Match staff columns by name ───────────────────────────────────────────
   hdr_lc <- tolower(trimws(hdr))
+  unrecognised <- character(0)   # non-blank cells matching no known keyword
+  blank_count  <- setNames(integer(length(STAFF)), STAFF)  # empty cells per person
   for (person in STAFF) {
     col_idx <- which(hdr_lc == tolower(person))
     # Fallback: match any header that starts with the person's first name
@@ -102,13 +119,17 @@ parse_time_off <- function(path, sheet = NULL) {
       message("NOTE: no column for '", person, "' in time-off source.")
       next
     }
-    vals <- as.character(raw[[col_idx[1L]]])
-    for (i in seq_along(dates)) {
-      type <- classify_cell(vals[i])
-      if (!is.na(type))
-        result[[person]] <- rbind(result[[person]],
-          data.frame(date = dates[i], type = type, stringsAsFactors = FALSE))
-    }
+    vals  <- as.character(raw[[col_idx[1L]]])
+    types <- vapply(vals, classify_cell, character(1L), USE.NAMES = FALSE)
+    # Track values that fell through to "off" without matching any keyword.
+    # Classification is unchanged; this only feeds the typo warning below.
+    odd <- vals[vapply(vals, is_unrecognised_cell, logical(1L), USE.NAMES = FALSE)]
+    if (length(odd)) unrecognised <- c(unrecognised, trimws(odd))
+    blank_count[[person]] <- sum(is.na(vals) | !nzchar(trimws(vals)))
+    keep  <- !is.na(types)
+    if (any(keep))
+      result[[person]] <- data.frame(date = dates[keep], type = types[keep],
+                                     stringsAsFactors = FALSE)
   }
 
   for (p in STAFF)
@@ -119,11 +140,70 @@ parse_time_off <- function(path, sheet = NULL) {
           format(SCHEDULE_START, "%b %d"), " \u2013 ",
           format(SCHEDULE_END,   "%b %d"), "):")
   for (p in STAFF) {
-    df    <- result[[p]]
-    n_off <- sum(df$type == "off", na.rm = TRUE)
-    n_vac <- sum(df$type == "vac", na.rm = TRUE)
-    n_cme <- sum(df$type == "cme", na.rm = TRUE)
-    message(sprintf("  %-10s  off=%d  vac=%d  cme=%d", p, n_off, n_vac, n_cme))
+    df      <- result[[p]]
+    n_off   <- sum(df$type == "off",   na.rm = TRUE)
+    n_vac   <- sum(df$type == "vac",   na.rm = TRUE)
+    n_cme   <- sum(df$type == "cme",   na.rm = TRUE)
+    n_green <- sum(df$type == "green", na.rm = TRUE)
+    n_yel   <- sum(df$type == "yellow", na.rm = TRUE)
+    n_pto   <- sum(df$type == "pto",    na.rm = TRUE)
+    nb <- if (p %in% names(blank_count)) blank_count[[p]] else 0L
+    message(sprintf("  %-10s  off=%d  vac=%d  cme=%d  pto=%d  green=%d  yellow=%d%s",
+                    p, n_off, n_vac, n_cme, n_pto, n_green, n_yel,
+                    if (nb > 0L)
+                      sprintf("   (%d blank -> %s)", nb,
+                              if (identical(BLANK_CELL_MEANS, "green")) "green" else "neutral")
+                    else ""))
+  }
+  # A mostly-empty column is worth calling out: with BLANK_CELL_MEANS = "green"
+  # it reads as full availability, which may simply mean the person has not
+  # filled the sheet in yet.
+  heavy <- names(blank_count)[blank_count >= 0.5 * sum(in_window)]
+  if (identical(BLANK_CELL_MEANS, "green") && length(heavy))
+    message(sprintf("NOTE: %s left over half the sheet blank; those days count as available.",
+                    paste(heavy, collapse = ", ")))
+
+  # ── Typo warning ──────────────────────────────────────────────────────────
+  # Any non-blank cell matching no known keyword was classified "off" (the safe
+  # default). That is silent by design, but a mistyped WORK keyword now costs
+  # double: it removes the day from the green-only phase AND reduces the
+  # person's pay-period target via pto_reduction(). So make it visible.
+  if (length(unrecognised)) {
+    tb  <- sort(table(tolower(unrecognised)), decreasing = TRUE)
+    top <- utils::head(tb, 8L)
+    message(sprintf(
+      "WARNING: %d cell value(s) matched no known keyword and were read as OFF: %s",
+      length(unrecognised),
+      paste(sprintf("'%s' x%d", names(top), as.integer(top)), collapse = ", ")))
+    message("         Check for typos - a mistyped work keyword becomes a day OFF.")
+  }
+
+  # ── Green supply per calendar date ────────────────────────────────────────
+  # Predicts where the green-only phase will leave holes, before spending an
+  # hour in the solver. Each day needs 2 people for APP1+APP2, 3 to also cover
+  # the night.
+  green_by_date <- table(unlist(lapply(STAFF, function(p) {
+    df <- result[[p]]
+    as.character(df$date[df$type == "green"])
+  })))
+  all_ds  <- as.character(all_dates())
+  n_green <- as.integer(green_by_date[all_ds]); n_green[is.na(n_green)] <- 0L
+  if (sum(n_green) == 0L) {
+    message("NOTE: no requested-work (green) days found. ",
+            "The green-only phase will produce an empty schedule.")
+  } else {
+    short2 <- sum(n_green < 2L); short3 <- sum(n_green < 3L)
+    message(sprintf(
+      "Green supply: %d green day-requests over %d dates (mean %.1f people/day).",
+      sum(n_green), length(all_ds), mean(n_green)))
+    if (short2 > 0L)
+      message(sprintf(
+        "  %d date(s) have <2 green volunteers - APP1/APP2 cannot both be filled.",
+        short2))
+    if (short3 > 0L)
+      message(sprintf(
+        "  %d date(s) have <3 green volunteers - the night slot may go unfilled.",
+        short3))
   }
 
   result
@@ -231,28 +311,73 @@ gs4_auth_auto <- function() {
 
 # ── Cell-level helpers ───────────────────────────────────────────────────────
 
-#' "cme" | "vac" | "off" | NA
+#' "cme" | "vac" | "green" | "off" | NA
 #'
 #' Classification rules (evaluated in order; first match wins):
-#'   1. Empty / whitespace / NA  → NA  (available to work, no entry recorded)
-#'   2. Contains a CME keyword as a whole word → "cme"
+#'   1. Empty / whitespace / NA  -> NA  (neutral "yellow" day, no entry recorded)
+#'   2. Contains a CME keyword as a whole word -> "cme"
 #'      Keywords: cme, conf, conference
-#'   3. Contains a VAC keyword as a whole word → "vac"
+#'   3. Contains a VAC keyword as a whole word -> "vac"
 #'      Keywords: VAC_KEYWORDS constant
-#'   4. Anything else non-blank → "off"
+#'   4. Contains a WORK keyword as a whole word -> "green" (requested WORK day)
+#'      Keywords: WORK_KEYWORDS constant
+#'   5. Anything else non-blank -> "off"
 #'
-#' Word-boundary (\\b) matching is used for both CME and VAC so that compound
-#' entries like "CME trip" or "conference travel" are classified as CME (not
-#' VAC), because the CME check wins over the VAC check.
+#' Word-boundary (\b) matching is used throughout, and the ORDER matters:
+#'   - CME before VAC  : "CME trip" resolves to cme, not vac.
+#'   - VAC before WORK : "work trip" resolves to vac, not green. A work trip is
+#'     time away from the unit, so blocking the day is the safe reading.
+#'
+#' Punctuation is stripped to spaces first so "W.", "Work?" and "y/n" tokenise
+#' into whole words that \b can match.
+#'
+#' NOTE on the final fallthrough: an unrecognised non-blank value becomes "off",
+#' NOT "green". This is deliberate. Treating an unrecognised value as available
+#' risks scheduling someone on a day they said they could not work - an
+#' operational incident; the reverse merely costs a shift. parse_time_off()
+#' warns about every value that lands here so typos stay visible.
 classify_cell <- function(val) {
-  if (is.na(val) || !nzchar(trimws(val))) return(NA_character_)
+  # Empty cell: governed by BLANK_CELL_MEANS ("green" = available, "neutral" =
+  # avoid if possible, same as Yellow).
+  blank_type <- if (identical(BLANK_CELL_MEANS, "green")) "green" else "yellow"
+  if (is.na(val) || !nzchar(trimws(val))) return(blank_type)
   v <- tolower(trimws(val))
-  # CME check — word-boundary regex so "CME trip" still resolves to cme
+  v <- gsub("[[:punct:]]+", " ", v)   # "W." / "Work?" -> whole-word matchable
+  v <- trimws(gsub("[[:space:]]+", " ", v))
+  if (!nzchar(v)) return(blank_type)      # cell held only punctuation
+  # CME check - word-boundary regex so "CME trip" still resolves to cme
   if (grepl("\\b(cme|conf|conference)\\b", v)) return("cme")
-  # VAC check — word-boundary regex on VAC_KEYWORDS
+  # PTO check - a requested paid-time-off day. Blocked like Red, credited
+  # toward the pay-period target like CME (see compute_targets()).
+  pto_pat <- paste0("\\b(", paste(unique(PTO_KEYWORDS), collapse = "|"), ")\\b")
+  if (grepl(pto_pat, v))                       return("pto")
+  # NEUTRAL check - "Yellow" and friends mean schedulable-but-not-requested,
+  # which is exactly what a blank cell means. Must come before the OFF
+  # fallthrough or every yellow day would be hard-blocked.
+  neu_pat <- paste0("\\b(", paste(unique(NEUTRAL_KEYWORDS), collapse = "|"), ")\\b")
+  if (grepl(neu_pat, v))                       return("yellow")
+  # VAC check - word-boundary regex on VAC_KEYWORDS
   vac_pat <- paste0("\\b(", paste(unique(VAC_KEYWORDS), collapse = "|"), ")\\b")
   if (grepl(vac_pat, v))                       return("vac")
+  # WORK check - requested-work ("green") day
+  work_pat <- paste0("\\b(", paste(unique(WORK_KEYWORDS), collapse = "|"), ")\\b")
+  if (grepl(work_pat, v))                      return("green")
   "off"
+}
+
+#' TRUE when `val` is a non-blank cell matching NO known keyword, so it fell
+#' through to "off". Used only for the typo warning - classification is unchanged.
+is_unrecognised_cell <- function(val) {
+  if (is.na(val) || !nzchar(trimws(val))) return(FALSE)
+  v <- tolower(trimws(val))
+  v <- trimws(gsub("[[:space:]]+", " ", gsub("[[:punct:]]+", " ", v)))
+  if (!nzchar(v)) return(FALSE)
+  pat <- paste0("\\b(",
+                paste(unique(c("cme", "conf", "conference", VAC_KEYWORDS,
+                               WORK_KEYWORDS, OFF_KEYWORDS, NEUTRAL_KEYWORDS,
+                               PTO_KEYWORDS)),
+                      collapse = "|"), ")\\b")
+  !grepl(pat, v)
 }
 
 looks_like_dates <- function(col) {

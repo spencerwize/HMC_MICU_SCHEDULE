@@ -4,16 +4,17 @@
 
 pkgs <- c(
   # Core logic
-  "R6",          # Reference classes for Scheduler
-  "tidyxl",      # Cell-level xlsx parsing (colors, borders)
+  "R6",          # Reference classes for SchedulerLP
   "openxlsx",    # Excel output with rich formatting
-  "lubridate",   # Date arithmetic
   "dplyr",       # Data manipulation
   "tidyr",       # Data reshaping
 
   # ILP scheduler (SchedulerLP)
   "highs",       # HiGHS MIP solver (fast, modern, open-source)
   "Matrix",      # sparse matrix for HiGHS constraint matrix
+
+  # Request-sheet input
+  "googlesheets4", # Reads the Red/Yellow/Green request sheet (public; no auth)
 
   # Shiny app
   "shiny",       # Web app framework
